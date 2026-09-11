@@ -2,9 +2,8 @@ name: Sync fork with eigger/espcomponents
 
 on:
   schedule:
-    # 03:17 UTC daily (~12:17 KST) - off-peak, arbitrary minute to avoid the
-    # GitHub Actions top-of-hour cron pile-up.
-    - cron: '17 3 * * *'
+    # 00:00 KST daily (= 15:00 UTC the previous day).
+    - cron: '0 15 * * *'
   workflow_dispatch: {}
 
 permissions:
