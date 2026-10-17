@@ -3,8 +3,8 @@
 This ESPHome component provides support for the [M5Stack Unit-Mini Scales](https://docs.m5stack.com/en/unit/Unit-Mini%20Scales) (SKU: U177) and the [M5Stack Unit Scales](https://docs.m5stack.com/en/unit/scales). It communicates over I2C, allowing weight measurements, LED control, button monitoring, calibration, and filter settings directly from Home Assistant.
 
 <p align="center">
-  <img src="https://static-cdn.m5stack.com/resource/docs/products/unit/Unit-Mini%20Scales/img-e124306a-177f-4385-996d-18f10f928040.webp" alt="Unit-Mini Scales" width="45%" />
-  <img src="https://static-cdn.m5stack.com/resource/docs/products/unit/UNIT%20Scales/img-22f5b336-4142-40f9-90ad-a99eaefeea09.webp" alt="Unit Scales" width="45%" />
+  <img src="../../docs/images/hardware/m5stack-unit-mini-scales.webp" alt="Unit-Mini Scales" width="45%" />
+  <img src="../../docs/images/hardware/m5stack-unit-scales.webp" alt="Unit Scales" width="45%" />
 </p>
 
 ## Configuration Example
@@ -66,6 +66,24 @@ number:
     gap:
       name: "Scale Gap Value"
 ```
+
+## Options and model selection
+
+| Option | Required / default |
+| --- | --- |
+| `model` | Required: `MINI` or `STANDARD` |
+| `address` | `0x26` |
+| `update_interval` | `1s` |
+| `i2c_id` | Select the bus when using multiple I2C buses |
+| `m5unit_scales_id` | Set on child platforms when using multiple scale hubs |
+
+Only configure filter and GAP controls on the MINI model. For multiple scales,
+give each hub an `id` and set `m5unit_scales_id` on its sensor, light, button,
+binary sensor, switch, and number platforms.
+
+If the scale is missing, check the I2C scan and the selected model. Use tare with
+an empty platform or an empty bowl before measuring. A complete camera-and-scale
+configuration is available in the [pet scale package](../../packages/scale).
 
 ## Calibration Procedure (MINI Model)
 

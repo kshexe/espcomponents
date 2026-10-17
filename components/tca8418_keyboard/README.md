@@ -1,7 +1,9 @@
-### TCA8418 Keyboard (M5Cardputer ADV)
+# TCA8418 Keyboard (M5Cardputer ADV)
 TCA8418 I2C keypad scan IC, mapped to the M5Cardputer ADV 4x14 keyboard layout.
 
-### add esphome *.yaml
+## Configuration
+
+Add to your M5Cardputer ADV device YAML. The example pins are specific to that board.
 ```yaml
 external_components:
   - source: github://eigger/espcomponents@latest
@@ -36,4 +38,10 @@ tca8418_keyboard:
 - `on_key_press` / `on_key_release` are the convenient way to react to keys in automations; `press_key` / `release_key` text sensors are optional and mainly for Home Assistant display. Modifier-only keys (`Fn`, `Shift`, `Ctrl`, `Opt`, `Alt`) do not fire events on their own — they shape the emitted key string (e.g. `Ctrl+c`, `F1`, `Up`).
 - `Fn` + key produces `Esc`, `F1`~`F12`, `Del` and arrow keys. `Ctrl` / `Opt` / `Alt` are added as prefixes (e.g. `Ctrl+c`).
 
-<img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1178/Cardputer-Adv_02.webp" width="400">
+<img src="../../docs/images/hardware/m5stack-cardputer-adv.webp" width="400">
+
+The I2C address defaults to `0x34`; use `i2c_id` when configuring multiple buses.
+If keys do not arrive, confirm the I2C scan, board pin mapping, and optional IRQ
+wiring.
+
+[Other components](../README.md)

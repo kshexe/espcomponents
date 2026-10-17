@@ -23,10 +23,18 @@ substitutions:
 packages:
   remote:
     refresh: always
-    url: https://github.com/eigger/espcomponents/
+    url: https://github.com/eigger/espcomponents
+    ref: master
     files:
       - packages/led/puppy_d1_mini.yaml
 ```
+
+## Shared settings
+
+The example above is a package fragment. Also configure the device name, Wi-Fi,
+API, and OTA in your device YAML, or include `packages/device_base.yaml` using the
+[shared device setup](../README.md#common-device-setup). The lamp package already
+selects the D1 Mini board.
 
 ## Hardware Configuration
 
@@ -41,13 +49,13 @@ packages:
 ## Gallery
 
 <div align="center">
-  <img src="../../documents/led/1.gif" width="48%">
-  <img src="../../documents/led/2.jpg" width="20%">
+  <img src="../../docs/images/packages/led/1.gif" width="48%">
+  <img src="../../docs/images/packages/led/2.jpg" width="20%">
 </div>
 <div align="center">
-  <img src="../../documents/led/3.jpg" width="32%">
-  <img src="../../documents/led/4.jpg" width="32%">
-  <img src="../../documents/led/5.jpg" width="32%">
+  <img src="../../docs/images/packages/led/3.jpg" width="32%">
+  <img src="../../docs/images/packages/led/4.jpg" width="32%">
+  <img src="../../docs/images/packages/led/5.jpg" width="32%">
 </div>
 
 
