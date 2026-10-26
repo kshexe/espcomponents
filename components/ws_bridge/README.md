@@ -222,6 +222,7 @@ update:
 | `reannounce_interval` | | `60s` | How often to resend `ws_bridge/connect` + all entity/state declarations while nominally connected. Guards against the HA-side integration losing track of this gateway (e.g. its config entry reloaded) while the raw connection and ping/pong stay healthy — that scenario is otherwise invisible, since HA answers pings regardless of our integration's state. If a re-announce goes unanswered, forces a full reconnect rather than repeating the same no-op |
 | `trackers` | | - | List of GPS `device_tracker` entities — see [GPS device trackers](#gps-device-trackers) below |
 | `entities` | | - | Existing ESPHome entities to expose without a parallel `platform: ws_bridge` entity — see [Exposing existing entities](#exposing-existing-entities) |
+| `snapshots` | | - | Optional ESP32 camera snapshots uploaded as HA `camera` or `image` entities — see [Camera snapshots](#camera-snapshots) |
 
 "Templatable" fields accept a plain string or a `!lambda return std::string(...);` — the lambda is re-evaluated on every `ws_bridge/connect` (the initial connect and each `reannounce_interval`), not just once at boot.
 
@@ -269,6 +270,92 @@ left out. `datetime_id:` must point at an entity of the same `type:`.
 `date` / `time` / `datetime` states cross the wire as timezone-naive ISO 8601
 strings (`2026-08-13`, `21:30:00`, `2026-08-13T21:30:00`); Home Assistant
 attaches its own local timezone to them rather than reading them as UTC.
+
+## Camera snapshots and live camera video
+
+`snapshots:` exposes JPEG frames from an `esp32_camera` as either a Home
+Assistant `camera` (the default) or `image`. It requires **ESPHome 2026.10+
+and ESP-IDF** because it uses ESPHome's generic `camera::Camera` listener API.
+This requirement applies only to configurations that use `snapshots:`; normal
+`ws_bridge` entity configurations keep their existing compatibility.
+
+```yaml
+esp32_camera:
+  id: front_sensor
+  # ...normal esp32_camera pins and settings...
+
+ws_bridge:
+  host: !secret ha_host
+  token: !secret ha_token
+  snapshots:
+    - camera_id: front_sensor
+      unique_id: front_camera
+      name: "Front camera"
+      update_interval: 30s       # request a fresh JPEG periodically
+    - camera_id: front_sensor
+      unique_id: front_thumbnail
+      name: "Front thumbnail"
+      platform: image            # default is camera
+      update_interval: 2min
+```
+
+Those are still photos: a frame is requested on `update_interval`, even if no
+camera card is open. To opt a **camera** into viewer-driven live MJPEG instead,
+set `video: true` (an `image` cannot be a live stream):
+
+```yaml
+ws_bridge:
+  # ...host and token...
+  snapshots:
+    - camera_id: front_sensor
+      unique_id: front_live
+      name: "Front live camera"
+      video: true
+      video_fps: 5                  # local capture limit, 1..30
+      video_max_bandwidth: 256000   # local upload limit, bytes/second
+```
+
+Video declarations advertise only the `push_stream` camera capability. Home
+Assistant sends `start_stream` when its first native MJPEG viewer opens and
+`stop_stream` after the final viewer leaves; no capture is requested while
+stopped. Repeated commands are safe. This is pushed JPEG/MJPEG, not HLS, does
+not advertise HA's `STREAM` feature, and needs neither an ESP HTTP server nor
+an inbound HA connection. The FPS and bandwidth values are local limits, not
+wire-protocol settings; under backpressure only the newest completed frame is
+kept, and no capture is requested while the bandwidth limit is holding uploads
+back.
+
+Things to know about `video: true`:
+
+- `video_fps` and `video_max_bandwidth` are accepted only together with
+  `video: true` (defaults 5 FPS, 256000 bytes/s; bandwidth must be at least 1).
+- `update_interval` is ignored for a video item.
+- With no viewer there is no capture and no media connection, and Home Assistant
+  drops its cached frame, so the entity picture and the card's still thumbnail
+  are empty until someone watches. Add a separate still snapshot of the same
+  camera (without `video`) if you want a thumbnail.
+- Home Assistant needs a hass-ws-bridge release with `push_stream` support;
+  older integrations never send `start_stream`, so no video appears.
+- A repeated `start_stream` is ignored, and a `stop_stream` followed quickly by
+  a new `start_stream` is applied in order.
+
+Each list item has a separate, ESP-initiated media WebSocket because Home
+Assistant binds one media connection to exactly one declared entity. The
+firmware first uses the existing authenticated control connection to request
+`ws_bridge/media_open`, then authenticates a second standard `/api/websocket`
+connection with the same token and sends `ws_bridge/media_connect`. Its JPEG
+is one logical binary WebSocket message: the assigned handler byte immediately
+followed by the JPEG bytes. This remains compatible with Home Assistant remote
+access/reverse proxies: Home Assistant never connects back to the ESP device.
+
+The worker retains a camera frame until its complete send finishes and keeps at
+most one pending/latest frame per configured snapshot. A failed fragment closes
+that media connection and obtains a fresh one-use session rather than trying to
+continue an incomplete binary message. Frames larger than 1 MiB are discarded.
+The media socket is recreated after a real control reconnect; routine control
+re-announces leave an established media socket alone. See the HA-side
+[wire protocol](https://github.com/eigger/hass-ws-bridge/blob/main/docs/PROTOCOL.md#321-authenticated-jpeg-upload-ws_bridgemedia_open--ws_bridgemedia_connect)
+for authentication and frame limits.
 
 ## Exposing existing entities
 

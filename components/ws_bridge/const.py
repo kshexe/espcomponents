@@ -10,6 +10,12 @@ CONF_MODEL = "model"
 CONF_HW_VERSION = "hw_version"
 CONF_KEEP_LAST_STATE_ON_DISCONNECT = "keep_last_state_on_disconnect"
 CONF_SYNC_ENTITIES = "sync_entities"
+CONF_SNAPSHOTS = "snapshots"
+CONF_CAMERA_ID = "camera_id"
+CONF_PLATFORM = "platform"
+CONF_VIDEO = "video"
+CONF_VIDEO_FPS = "video_fps"
+CONF_VIDEO_MAX_BANDWIDTH = "video_max_bandwidth"
 
 CONF_UNIQUE_ID = "unique_id"
 # Prefixed with ws_ to avoid colliding with ESPHome's own reserved
