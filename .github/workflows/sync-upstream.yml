@@ -13,20 +13,25 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Fast-forward master from upstream (eigger/espcomponents)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Merge upstream (eigger/espcomponents) into master
         run: |
           set -euo pipefail
-          # Uses GitHub's own "sync fork" API (same one behind the web UI's
-          # "Sync fork" button) rather than a raw git push - this is a
-          # fast-forward-only merge done server-side, so it can't silently
-          # clobber anything, and it isn't subject to the PAT "workflow"
-          # scope restriction that a plain `git push` touching
-          # .github/workflows/ would hit.
-          curl -fsSL -X POST \
-            -H "Authorization: token ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${{ github.repository }}/merge-upstream" \
-            -d '{"branch":"master"}'
+          # A real git merge, not GitHub's fast-forward-only "sync fork" API (the merge-upstream
+          # endpoint behind the web UI's "Sync fork" button): this fork carries its own commits
+          # on top of upstream (starting with the commit that added this very workflow), so a
+          # fast-forward stopped being possible the moment that commit landed - the API call this
+          # replaced had been failing with 422 on any day upstream's new commits actually touched
+          # the same files as one of this fork's own, rather than every day, since a
+          # non-conflicting fast-forward against a divergent-but-non-overlapping history can still
+          # go through - see this repo's own 2026-10-26 failed run.
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/eigger/espcomponents.git
+          git fetch upstream master
+          git merge upstream/master --no-edit
+          git push origin master
