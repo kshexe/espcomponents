@@ -1,0 +1,79 @@
+# Audio hardware and embedded effects for the public Fallout dashboard.
+# Volume, mute, priority and alert playback are controlled by the parent YAML.
+substitutions:
+  ui_sound_base_url: "https://raw.githubusercontent.com/eigger/espcomponents/4d5388c1b858406db87b1cf697cda6eef154a7f7/packages/display/colorado/sounds"
+
+esphome:
+  min_version: 2026.10.2
+
+i2s_audio:
+  - id: tab5_audio_bus
+    i2s_lrclk_pin: GPIO29
+    i2s_bclk_pin: GPIO27
+    i2s_mclk_pin: GPIO30
+
+audio_dac:
+  - platform: es8388
+    id: tab5_audio_dac
+    i2c_id: bsp_bus
+    address: 0x10
+
+speaker:
+  - platform: i2s_audio
+    id: tab5_speaker
+    i2s_audio_id: tab5_audio_bus
+    i2s_dout_pin: GPIO26
+    audio_dac: tab5_audio_dac
+    dac_type: external
+    channel: mono
+    sample_rate: 48000
+    bits_per_sample: 16bit
+    buffer_duration: 100ms
+    timeout: never
+
+media_player:
+  - platform: speaker
+    id: ui_sound_player
+    internal: true
+    buffer_size: 32768
+    volume_initial: 40%
+    # ES8388 maps 0..100% to -96..0 dB. Use -48..0 dB for the UI range;
+    # otherwise the default 40% is about -58 dB and barely audible.
+    # The media player still passes an exact zero through for silence.
+    volume_min: 50%
+    announcement_pipeline:
+      speaker: tab5_speaker
+      format: WAV
+      sample_rate: 48000
+      num_channels: 1
+    files:
+      - id: sound_boot
+        file: ${ui_sound_base_url}/boot_mechanical_terminal.wav
+      - id: sound_menu_open
+        file: ${ui_sound_base_url}/ui_menu_open_terminal.wav
+      - id: sound_menu_close
+        file: ${ui_sound_base_url}/ui_menu_close_terminal.wav
+      - id: sound_click
+        file: ${ui_sound_base_url}/ui_click_terminal.wav
+      - id: sound_success
+        file: ${ui_sound_base_url}/ui_success_terminal.wav
+      - id: sound_warning
+        file: ${ui_sound_base_url}/ui_warning_terminal.wav
+      - id: sound_danger
+        file: ${ui_sound_base_url}/ui_danger_terminal.wav
+      - id: sound_failure
+        file: ${ui_sound_base_url}/ui_failure_terminal.wav
+      - id: sound_notice
+        file: ${ui_sound_base_url}/ui_notice_terminal.wav
+      - id: sound_wifi_connected
+        file: ${ui_sound_base_url}/link_wifi_connected.wav
+      - id: sound_wifi_disconnected
+        file: ${ui_sound_base_url}/link_wifi_disconnected.wav
+      - id: sound_bluetooth_connected
+        file: ${ui_sound_base_url}/link_bluetooth_connected.wav
+      - id: sound_bluetooth_disconnected
+        file: ${ui_sound_base_url}/link_bluetooth_disconnected.wav
+      - id: sound_gps_connected
+        file: ${ui_sound_base_url}/link_gps_connected.wav
+      - id: sound_gps_disconnected
+        file: ${ui_sound_base_url}/link_gps_disconnected.wav

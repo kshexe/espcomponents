@@ -1,0 +1,335 @@
+[
+  {
+    "file": "archive/synthesized/boot.wav",
+    "duration_ms": 1100,
+    "peak": 0.666748046875,
+    "bytes": 105644,
+    "sha256": "3ef6e93e9464469a5f0d1b7ee63def690e203080671b75c36775cf3485739590",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/boot_engine_synth.wav",
+    "duration_ms": 2400,
+    "peak": 0.3953857421875,
+    "bytes": 230444,
+    "sha256": "fc69329e749e5b8100941fc775d9746f647d0b575bf6a009c5009174802d8ef1",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/boot_terminal_synth.wav",
+    "duration_ms": 1800,
+    "peak": 0.8018798828125,
+    "bytes": 172844,
+    "sha256": "184b2e70fc231346f0a71cf31c3be3a7933d2f640e8122e281ada7f8da1a025f",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/click.wav",
+    "duration_ms": 90,
+    "peak": 0.6370849609375,
+    "bytes": 8684,
+    "sha256": "cddaf8d8fcd4c7d3223a25e3882f01705591b7f185cd7e4aa761f8a515bfcdad",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/danger.wav",
+    "duration_ms": 920,
+    "peak": 0.739105224609375,
+    "bytes": 88364,
+    "sha256": "5fb88bc87fd6a6b24e82ac2451a2627e0fc12e3cea3ac48c08f982850a2de486",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/failure.wav",
+    "duration_ms": 550,
+    "peak": 0.61627197265625,
+    "bytes": 52844,
+    "sha256": "72443a3a3d4382f4ed387c5f66b956b65b6f575dd3c05edd038e1c3740ee8549",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/menu_close.wav",
+    "duration_ms": 220,
+    "peak": 0.58477783203125,
+    "bytes": 21164,
+    "sha256": "0aa1649b62238b5d9d5814eba9bd670b719bfbd94206a43966bb57e5d9c142d7",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/menu_open.wav",
+    "duration_ms": 220,
+    "peak": 0.613555908203125,
+    "bytes": 21164,
+    "sha256": "27769fbf04f9d25d7e52eb8ed02e1dc2213986a4f539972fb64fcbefb82b72a9",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/notice.wav",
+    "duration_ms": 400,
+    "peak": 0.814178466796875,
+    "bytes": 38444,
+    "sha256": "9649f2bcc7e98a9cafeff5ec4ee168384b951d86cf12eee50cfe3dc81f0be3d5",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/success.wav",
+    "duration_ms": 520,
+    "peak": 0.75531005859375,
+    "bytes": 49964,
+    "sha256": "9e19e45fbde68e3be0eb47d4e20fe3e0f0bc78e8e47be8e1f04ae06304ecc251",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "archive/synthesized/warning.wav",
+    "duration_ms": 720,
+    "peak": 0.7254638671875,
+    "bytes": 69164,
+    "sha256": "e702dcff847f8a67fda92796569a88acd060fc44d6b8546b61772f42f6a4076e",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "boot.wav",
+    "duration_ms": 1100,
+    "peak": 0.439971923828125,
+    "bytes": 105644,
+    "sha256": "9435f26754ac2cd2be4fad37fe07ce84d5e74a2f981191891d84253b34c9bfe6",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "boot_engine_terminal.wav",
+    "duration_ms": 3200,
+    "peak": 0.889984130859375,
+    "bytes": 307244,
+    "sha256": "95613597b660237e0fba8e9de2e427cf7727131c84a391311f064a818a4c97f6",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "boot_mechanical_terminal.wav",
+    "duration_ms": 3300,
+    "peak": 0.889984130859375,
+    "bytes": 316844,
+    "sha256": "c5fb0249f21ece9fb41463c9fccd47eab79ffa75b1042064f7268200d768bd02",
+    "selected_boot": true,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "boot_turbine_terminal.wav",
+    "duration_ms": 3600,
+    "peak": 0.57281494140625,
+    "bytes": 345644,
+    "sha256": "41ad0f7c89af909d97d7045df3a1870a4d40020ab8dfd09342c4fddcb5b41a24",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "click.wav",
+    "duration_ms": 90,
+    "peak": 0.160003662109375,
+    "bytes": 8684,
+    "sha256": "a029fa30f5f28f9d99549b686db652662f11b679203b69c186e0c0ff8006d0a9",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "danger.wav",
+    "duration_ms": 920,
+    "peak": 0.67999267578125,
+    "bytes": 88364,
+    "sha256": "65c25d78b96570cbd70c620ed8c7407e528f5af3a6885d5ee00d4673312c4f8b",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "failure.wav",
+    "duration_ms": 550,
+    "peak": 0.41998291015625,
+    "bytes": 52844,
+    "sha256": "abb4d35f622e5f8cb292986c56742c27e3deb04fd9893762db4e91332ea5ffbc",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "link_bluetooth_connected.wav",
+    "duration_ms": 380,
+    "peak": 0.54205322265625,
+    "bytes": 36524,
+    "sha256": "ede854650b023f0c522105f485acbbdad38b93fafd418584faad302cb1e7d59d",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "link_bluetooth_disconnected.wav",
+    "duration_ms": 380,
+    "peak": 0.511383056640625,
+    "bytes": 36524,
+    "sha256": "93ee0a71cb2911fa4dce96cde0ecc7159d7c4ba54203f859eb2fa3ff93f28884",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "link_gps_connected.wav",
+    "duration_ms": 600,
+    "peak": 0.572052001953125,
+    "bytes": 57644,
+    "sha256": "164e35624cd6a7abc903bad9a841f8bcf6501fe1439b985c755f3270faf870b6",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "link_gps_disconnected.wav",
+    "duration_ms": 600,
+    "peak": 0.470794677734375,
+    "bytes": 57644,
+    "sha256": "0d21a974019975e111c430b793f0645999485f685129efbde52d6e29d81ee144",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "link_wifi_connected.wav",
+    "duration_ms": 460,
+    "peak": 0.594207763671875,
+    "bytes": 44204,
+    "sha256": "73038d407d185fd60f7533baec150ef21fd4494587e39abbc0a6f2bd6ba1665d",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "link_wifi_disconnected.wav",
+    "duration_ms": 460,
+    "peak": 0.506744384765625,
+    "bytes": 44204,
+    "sha256": "c5d50d19d88aa35e490aed2aaf8a5277160d21f036ec3b54d58c1dfc166b9822",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "menu_close.wav",
+    "duration_ms": 220,
+    "peak": 0.220001220703125,
+    "bytes": 21164,
+    "sha256": "8b4e39bad339d4d0b9a793d656d7500be36f6bf65986adca668490fc39669a4a",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "menu_open.wav",
+    "duration_ms": 220,
+    "peak": 0.239990234375,
+    "bytes": 21164,
+    "sha256": "167a675a19bd17dc9160191c73db5410bce6c94fa9fda621c5fa1a24fec4eb6b",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "notice.wav",
+    "duration_ms": 400,
+    "peak": 0.29998779296875,
+    "bytes": 38444,
+    "sha256": "2a4f6264566945f141058f1d22441665972a586d309414a8c8974f2beeea1767",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "success.wav",
+    "duration_ms": 520,
+    "peak": 0.3599853515625,
+    "bytes": 49964,
+    "sha256": "adb5d61e480c89a170f5f33e56cfcc5a74d9ceb6ce93e279e0983ee67584ac82",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  },
+  {
+    "file": "ui_click_terminal.wav",
+    "duration_ms": 180,
+    "peak": 0.889984130859375,
+    "bytes": 17324,
+    "sha256": "86566d6fa17550ca69f6f62c38fa79a22900c0962524df5c28b917be5daad9dd",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_danger_terminal.wav",
+    "duration_ms": 1350,
+    "peak": 0.626861572265625,
+    "bytes": 129644,
+    "sha256": "6e7a2ec5acdc0c5d557dcd17b6bcd84d1d9eff9e0c80f24e13a6881aa9c20de2",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_failure_terminal.wav",
+    "duration_ms": 420,
+    "peak": 0.572723388671875,
+    "bytes": 40364,
+    "sha256": "7ffdd9cc185997fa8f7e75d7eafde311c4b3ce6c75184b5fae6f7e4752a5f080",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_menu_close_terminal.wav",
+    "duration_ms": 600,
+    "peak": 0.688507080078125,
+    "bytes": 57644,
+    "sha256": "1dec506e28219c7a4b4164cfac471860e7a61f59cedddcdee8784c745bcc1fc8",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_menu_open_terminal.wav",
+    "duration_ms": 650,
+    "peak": 0.875457763671875,
+    "bytes": 62444,
+    "sha256": "488fe302634869f63f26cc9318308c151d3a3a2d12f34dd6116f5084adce5059",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_notice_terminal.wav",
+    "duration_ms": 550,
+    "peak": 0.7425537109375,
+    "bytes": 52844,
+    "sha256": "2a70f52fe8b6d4335af080a7de09a5ee3184594ea31eea4d8808ade59ca09e36",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_success_terminal.wav",
+    "duration_ms": 650,
+    "peak": 0.889984130859375,
+    "bytes": 62444,
+    "sha256": "4cdab21f7657ca9e22ee9ef615a3b399954327356ca5bae28f503544c59f4ea0",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "ui_warning_terminal.wav",
+    "duration_ms": 750,
+    "peak": 0.62322998046875,
+    "bytes": 72044,
+    "sha256": "ce14adcd9ee82d9751b2f6b7b89b8292631df3709f3bb5f4f3364e62af6709bd",
+    "selected_boot": false,
+    "license": "Pixabay Content License (adaptation)"
+  },
+  {
+    "file": "warning.wav",
+    "duration_ms": 720,
+    "peak": 0.519989013671875,
+    "bytes": 69164,
+    "sha256": "4eb3b6474062ca7604a48b69b87915012d49077d10ac935e64ebea9c49839703",
+    "selected_boot": false,
+    "license": "Original synthesized project asset"
+  }
+]
