@@ -21,9 +21,70 @@ See [BOOT_SOURCES.md](BOOT_SOURCES.md) for authors and license links, and
 [boot_processing.json](boot_processing.json) for excerpts, timing and processing.
 Original downloaded recordings are not included.
 
-## Active UI sounds
+## Retro warning and danger sounds
 
-The active set adapts the approved RescopicSound Modern Interface recordings,
+| File | Event | Duration |
+| --- | --- | --- |
+| [`ui_warning_retro_chime.wav`](ui_warning_retro_chime.wav) | Caution: single vintage car chime | 750 ms |
+| [`ui_danger_retro_buzzer.wav`](ui_danger_retro_buzzer.wav) | Danger: two short buzzes and one long buzz | 1350 ms |
+| [`ui_danger_retro_chime_double.wav`](ui_danger_retro_chime_double.wav) | Danger (alternative): the caution chime struck twice, 220 ms apart | 970 ms |
+
+The caution cue adapts [rgjpb's Ford/GM-style door chime recreation](https://freesound.org/people/rgjpb/sounds/686265/).
+The danger cue uses [scruss's recording of a 1940s Signal Electric R-68 Morse practice relay buzzer](https://freesound.org/people/scruss/sounds/687948/).
+Both sources are [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+The chime is trimmed with a short fade. The recorded buzzer is slowed to
+quarter speed to bring its high-frequency buzz into the speaker's midrange,
+then cut into three pulses. Both cues are band-limited and level-adjusted.
+
+The terminal warning and danger files below are still available with the same
+durations. The two pairs can be exchanged by changing the filenames in the
+dashboard's `media_player.files`.
+
+`ui_warning_retro_chime_padded.wav` (870 ms) and `ui_danger_retro_buzzer_padded.wav`
+(1470 ms) are the same audio followed by 120 ms of digital silence, so a speaker stop that
+drops its final buffer can only cut silence. The unpadded files remain for older pins.
+`ui_danger_retro_chime_double_padded.wav` (1090 ms) pads the double-chime danger cue the
+same way. It reuses the caution chime, so caution and danger share one voice; it is leveled
+to the buzzer's loudness and built by [`tools/generate_retro_ui.py`](../tools/generate_retro_ui.py).
+
+## Retro UI and connection sounds
+
+Built by [`tools/generate_retro_ui.py`](../tools/generate_retro_ui.py) by layering CC0
+recordings with the retro caution chime, so menus, clicks and connection cues share the
+alert voice while each event keeps its own mechanical/electrical character.
+See [`retro_ui_spectrograms.png`](retro_ui_spectrograms.png).
+
+| File | Event | Duration | Layers |
+| --- | --- | --- | --- |
+| `ui_click_retro.wav` | Button | 150 ms | toggle-switch snap, faint chime glint |
+| `ui_click_retro_chime.wav` | Button (chime only) | 150 ms | short low-passed chime strike |
+| `ui_menu_open_retro.wav` | Menu open | 440 ms | tape-deck latch, rising chime fourth |
+| `ui_menu_close_retro.wav` | Menu close | 400 ms | falling chime fourth, tape-deck clunk |
+| `ui_success_retro.wav` | Success | 730 ms | switch throw, typewriter bell, chime octave |
+| `ui_success_retro_chime.wav` | Success (chime only) | 650 ms | quick rising chime major arpeggio |
+| `ui_failure_retro.wav` | Failure | 520 ms | relay clack, falling semitone, short relay buzz |
+| `ui_notice_retro.wav` | Information | 600 ms | two soft lowered typewriter bells |
+| `ui_notice_retro_chime.wav` | Information (chime only) | 600 ms | one light chime an octave up |
+| `link_wifi_{connected,disconnected}_retro.wav` | Wi-Fi | 540 / 520 ms | radio static, high fifth |
+| `link_bluetooth_{connected,disconnected}_retro.wav` | Bluetooth | 540 / 520 ms | turn-signal relay tick-tock, middle fifth |
+| `link_gps_{connected,disconnected}_retro.wav` | GPS | 540 / 520 ms | radio-dial tuning sweep, low fifth |
+
+Connected cues rise a fifth after the texture; disconnected cues fall a fifth into it.
+All cues are leveled near −21 dB RMS (alerts stay louder), with a zero first sample and at
+least 80 ms of trailing silence.
+
+Sources, all [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/) (Freesound previews,
+not redistributed): [Light Switch (on / off)](https://freesound.org/people/Breviceps/sounds/457037/) by Breviceps,
+[cassette tape deck open, close + tape handling](https://freesound.org/people/kyles/sounds/450525/) by kyles,
+[Nissan Sentra turning signal](https://freesound.org/people/MPierluissi/sounds/446322/) by MPierluissi,
+[Radio Noise](https://freesound.org/people/RutgerMuller/sounds/50750/) by RutgerMuller,
+[Radio Dial Tuning](https://freesound.org/people/jc144940/sounds/179118/) by jc144940,
+[Typewriter ding](https://freesound.org/people/_stubb/sounds/406243/) by _stubb,
+plus the door chime and relay buzzer credited above.
+
+## Terminal UI sounds
+
+The terminal set adapts the approved RescopicSound Modern Interface recordings,
 with trimmed tails, pitch-preserving tempo adjustment, speaker-oriented EQ and
 a quiet mechanical transient from the selected boot composite. Caution uses one
 alarm pulse; danger uses two. See [ui_processing.json](ui_processing.json) for
@@ -55,7 +116,7 @@ source links, authors, excerpts and processing. The applicable license is the
 | `notice.wav` | Information | 400 ms |
 
 These legacy files and the archive are original synthesized sounds, preserved
-for older pinned configurations. The new active set is listed above.
+for older pinned configurations. The terminal and retro alternatives are listed above.
 
 ## Archived experiments
 
@@ -64,8 +125,8 @@ UI set plus `boot_engine_synth.wav` and `boot_terminal_synth.wav`. They remain
 available for comparison and are not selected by the dashboard.
 
 `manifest.json` records the format, duration, peak, size and SHA-256 of every WAV.
-Third-party-derived recordings retain their applicable Pixabay terms and are not
-relicensed under the repository's software license.
+Third-party-derived recordings keep the license listed for their source in the
+manifest.
 
 ## Rebuilding
 
