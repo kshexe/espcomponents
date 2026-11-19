@@ -1,0 +1,826 @@
+# Compile test for lvgl_fx: the full YAML schema (transitions, presets, effects, effect_defaults), every YAML action,
+# and the C++ API from lambdas (P1-P3: every function, every transition style, the const-table format).
+# No real hardware needed: an SPI ILI9341 with dummy pins gives LVGL a display to build widgets on.
+# Rejected configurations are tested by tests/native/lvgl_fx_config/test_invalid_configs.py, not compiled here.
+esphome:
+  name: test-lvgl-fx
+  on_boot:
+    - priority: -100
+      then:
+        # Policy row 2: nothing animates before this.
+        - lvgl_fx.start:
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+external_components:
+  - source:
+      type: local
+      path: ../../../components
+    components: [ lvgl_fx ]
+
+logger:
+
+globals:
+  - id: popup_open
+    type: bool
+    initial_value: "false"
+
+spi:
+  clk_pin: GPIO18
+  mosi_pin: GPIO23
+
+display:
+  - platform: mipi_spi
+    id: main_display
+    model: ILI9341
+    cs_pin: GPIO15
+    dc_pin: GPIO27
+    reset_pin: GPIO33
+    invert_colors: false
+    update_interval: never
+
+image:
+  - platform: file
+    file: test.png
+    id: test_image
+    type: RGB565
+    resize: 16x16
+
+color:
+  - id: fx_red
+    red: 100%
+    green: 0%
+    blue: 0%
+
+lvgl_fx:
+  id: fx_main
+  motion:
+    fast: 100ms
+    normal: 180ms
+    slow: 400ms
+    intensity: 0.8
+  max_targets: 8
+  slots_in_psram: true
+  suppress_when: !lambda return id(popup_open);
+
+  transitions:
+    # Per-property defaults: every field of every property, or only some.
+    defaults:
+      visible: { style: fade, duration: normal, curve: ease_out, delay: 0ms }
+      opacity: { duration: normal, curve: linear }
+      value: { duration: 250ms, curve: ease_in_out }
+      text: { style: fade, duration: fast, from: 85%, format: "%.0f" }
+      color: { duration: normal }
+      position: { duration: normal, curve: ease_out }
+      rotation:
+    custom:
+      - id: gauge_slow
+        policy: always
+        value: { duration: slow }
+      # `then`: an effect of this file, played when the transition is done
+      - id: prnd_move
+        position: { duration: 160ms }
+        then: prnd_confirm
+      # a built-in effect works as `then` too; the transition may be about every property at once
+      - id: everything
+        visible: { style: zoom, from: 80%, duration: 300ms, delay: 20ms, curve: ease_in }
+        opacity: { duration: 0ms }
+        value: { duration: 1s, curve: linear }
+        text: { style: roll, distance: 14, from: 70%, duration: 140ms }
+        color: { duration: slow, curve: ease_in_out }
+        position: { duration: fast }
+        rotation: { duration: 500ms, curve: ease_out }
+        then: pulse
+      # visible: separate show and hide styles
+      - id: card
+        visible: { show: slide_up, hide: fade, distance: 12 }
+      - id: card_left
+        visible: { show: slide_left, hide: slide_right, distance: 30 }
+      - id: card_down
+        visible: { style: slide_down }
+      - id: card_right
+        visible: { style: slide_right }
+      - id: card_none
+        visible: { show: none, hide: zoom, from: 60% }
+      - id: hide_only
+        visible: { hide: slide_down }
+      - id: gear_roll
+        text: { style: roll, distance: 14, duration: 140ms }
+      - id: counter
+        text: { style: count, format: "%.1f%%", duration: 600ms, curve: ease_in_out }
+      - id: text_plain
+        text: { style: none, format: "%5.2f" }
+      - id: text_flags
+        text: { format: "[%-+8.3f] %%" }
+      # an id equal to the name of the generated defaults tables must not clash with them
+      - id: defaults
+        visible: { style: fade }
+        text: { style: roll }
+
+    bindings:
+      - { id: fx_bar, value: gauge_slow }
+      - { id: fx_label, text: gear_roll }
+      - { id: fx_obj, position: prnd_move, visible: card }
+
+  # Built-in effects, magnitudes only
+  presets:
+    pulse: { scale: 112%, duration: slow, curve: ease_out }
+    shake: { distance: 3, cycles: 3, axis: x, duration: 150ms }
+    nudge_up: { distance: 6 }
+    nudge_down: { distance: 5, duration: fast }
+    nudge_left: { distance: 7, curve: ease_in }
+    nudge_right: { distance: 3 }
+    flash: { property: bg_color, color: white, amount: 80%, duration: normal }
+    glow: { opacity: 60% }
+    blink: { opacity: 25%, duration: 0.3s }
+
+  effect_defaults:
+    retrigger: restart
+    when_suppressed: skip
+    policy: normal
+    repeat: 1
+    repeat_delay: 50ms
+    cooldown: 100ms
+    defer_timeout: 2s
+
+  effects:
+    - id: image_pulse_test
+      tracks:
+        - image_pulse: { amount: 30%, duration: 220ms, curve: ease_out }
+        - flash: { property: image_recolor, profile: triangle, amount: 29%, duration: 220ms }
+    - id: prnd_confirm
+      tracks:
+        - flash: { property: bg_color, color: white, duration: 340ms, curve: ease_in }
+    # every track, every option
+    - id: heat_up
+      cooldown: 2500ms
+      retrigger: ignore
+      when_suppressed: defer
+      defer_timeout: 1500ms
+      policy: normal
+      repeat: 3
+      repeat_delay: 100ms
+      then: prnd_confirm
+      tracks:
+        - nudge: { y: -2, duration: 220ms }
+        - nudge: { x: 3, y: 1, delay: 20ms, curve: linear }
+        - flash: { property: image_recolor, color: 0xFF8800, amount: 25%, duration: normal, delay: 60ms }
+        - flash: { property: text_color, color: fx_red, curve: ease_in }
+        - flash:
+        - pulse: { scale: 105%, delay: 20ms, curve: ease_out }
+        - shake: { distance: 3, cycles: 3, axis: y, duration: fast }
+        - shake: { duration: slow }
+        - glow: { opacity: 80%, duration: slow }
+        - blink: { opacity: 40%, curve: ease_in_out, duration: 1.5s }
+    # a loop: on until stopped
+    - id: warning_blink
+      repeat: infinite
+      repeat_delay: 400ms
+      policy: always
+      tracks:
+        - blink: { opacity: 35%, duration: slow }
+    - id: loop_with_defaults
+      repeat: infinite
+      tracks:
+        - glow:
+    # then chains: built-in effect, effect declared later, effect declared earlier
+    - id: chain_first
+      then: chain_second
+      tracks:
+        - pulse: { scale: 120% }
+    - id: chain_second
+      then: pulse
+      repeat: 2
+      tracks:
+        - nudge: { x: -4 }
+    - id: chain_third
+      then: chain_first
+      tracks:
+        - flash: { amount: 50% }
+    - id: delayed
+      tracks:
+        - blink: { delay: 60s, duration: 5s }
+
+lvgl:
+  displays: [ main_display ]
+  pages:
+    - id: main_page
+      widgets:
+        - obj:
+            id: fx_obj
+            x: 10
+            y: 10
+            width: 120
+            height: 60
+            widgets:
+              - label:
+                  id: fx_label
+                  text: "0"
+        - label:
+            id: fx_number
+            y: 40
+            x: 150
+            text: "0"
+        - obj:
+            id: fx_card
+            x: 150
+            y: 60
+            width: 60
+            height: 40
+        - bar:
+            id: fx_bar
+            y: 80
+            width: 100
+            height: 12
+            min_value: 0
+            max_value: 100
+            value: 10
+        - arc:
+            id: fx_arc
+            y: 100
+            width: 60
+            height: 60
+            min_value: 0
+            max_value: 200
+        - slider:
+            id: fx_slider
+            y: 170
+            width: 100
+            min_value: 0
+            max_value: 50
+        - image:
+            id: fx_image
+            src: test_image
+            x: 150
+            y: 10
+        # A compound widget: its id is an esphome::lvgl::LvCompound-derived object, accepted by the overloads.
+        - dropdown:
+            id: fx_dropdown
+            y: 200
+            options:
+              - one
+              - two
+
+interval:
+  - interval: 1s
+    then:
+      - lambda: |-
+          // visibility, opacity and the hide/show reversal rules
+          fx::set_visible(id(fx_obj), false);
+          fx::set_visible(id(fx_obj), true);
+          fx::set_visible(id(fx_obj), false, fx::Opt{nullptr, true});
+          fx::set_visible(id(fx_obj), true, {.transition = nullptr, .force = true});
+          fx::set_opacity(id(fx_obj), 128);
+          fx::set_opacity(id(fx_obj), LV_OPA_COVER);
+
+          // Interrupt same-target transitions without canceling unrelated effects or running then.
+          fx::set_visible(id(fx_obj), true, {.instant = true});
+          fx::set_opacity(id(fx_obj), 128, {.instant = true});
+          fx::set_value(id(fx_bar), 42, {.instant = true});
+          fx::set_value(id(fx_image), 45, {.instant = true});
+          fx::set_value(id(fx_label), 42, {.instant = true});
+          fx::set_text(id(fx_label), "42", {.instant = true});
+          fx::set_color(id(fx_label), lv_color_hex(0xff0000), {.instant = true});
+          fx::set_x(id(fx_obj), 10, {.instant = true});
+          fx::set_y(id(fx_obj), 10, {.instant = true});
+          fx::set_rotation(id(fx_obj), 0, {.instant = true});
+
+          // value for every widget kind, including NaN -> minimum
+          fx::set_value(id(fx_bar), 42.0f);
+          fx::set_value(id(fx_bar), NAN);
+          fx::set_value(id(fx_arc), 120);
+          fx::set_value(id(fx_slider), 25.5f);
+          fx::set_value(id(fx_image), 45.0f);
+          fx::set_value(id(fx_image), -15.0f);
+
+          // text, color (label -> text color, image -> recolor, obj -> bg color)
+          fx::set_text(id(fx_label), "42");
+          fx::set_text(id(fx_label), nullptr);
+          fx::set_color(id(fx_label), lv_color_hex(0xff0000));
+          fx::set_color(id(fx_image), lv_color_hex(0x00ff00));
+          fx::set_color(id(fx_obj), lv_color_hex(0x0000ff));
+
+          // position and transform rotation
+          fx::set_x(id(fx_obj), 20);
+          fx::set_y(id(fx_obj), 30);
+          fx::set_rotation(id(fx_obj), 90.0f);
+          fx::set_rotation(id(fx_obj), NAN);
+
+          // ESPHome compound widget overloads
+          fx::set_visible(id(fx_dropdown), true);
+          fx::set_opacity(id(fx_dropdown), 200);
+          fx::set_value(id(fx_dropdown), 1.0f);  // not a ranged widget: logged once, no effect
+          fx::set_text(id(fx_dropdown), "x");    // not a label: logged once, no effect
+          fx::set_color(id(fx_dropdown), lv_color_hex(0x123456));
+          fx::set_x(id(fx_dropdown), 5);
+          fx::set_y(id(fx_dropdown), 205);
+          fx::set_rotation(id(fx_dropdown), 0.0f);
+          fx::stop(id(fx_dropdown));
+
+          // stop snaps everything to its final state
+          fx::stop(id(fx_obj));
+          fx::stop(id(fx_bar));
+
+          // policy switches and tokens
+          fx::set_enabled(false);
+          fx::set_value(id(fx_bar), 7.0f);  // applied instantly
+          fx::set_enabled(true);
+          fx::set_reduced_motion(true);
+          fx::set_value(id(fx_bar), 8.0f);
+          fx::set_reduced_motion(false);
+
+          // user-defined transition table: the format the codegen of a later phase emits
+          static const fx::PropTransition slow_value = {.duration = fx::DUR_SLOW, .curve = fx::Curve::EASE_IN_OUT};
+          static const fx::PropTransition quick_text = {.duration = 60, .delay = 10, .style = fx::Style::FADE,
+                                                        .from = 50};
+          static const fx::TransitionDef gauge_slow = {{nullptr, nullptr, &slow_value, &quick_text, nullptr, nullptr,
+                                                        nullptr},
+                                                       nullptr};
+          fx::set_value(id(fx_bar), 60.0f, fx::Opt{&gauge_slow});
+          fx::set_text(id(fx_label), "7", fx::Opt{&gauge_slow, false});
+          fx::detail::core().defaults = &gauge_slow;  // per-property defaults override
+          fx::set_value(id(fx_arc), 10.0f);
+          fx::detail::core().defaults = nullptr;
+          fx::motion().intensity = 0.8f;
+
+          // user channel with every option
+          fx::TweenOpt opt;
+          opt.duration = 250;
+          opt.curve = fx::Curve::EASE_IN_OUT;
+          opt.delay = 20;
+          opt.target = id(fx_bar);
+          opt.on_done = [](void *var) { ESP_LOGD("test", "tween done %p", var); };
+          fx::tween(id(fx_bar),
+                    [](void *var, int32_t v) {
+                      lv_bar_set_value(static_cast<lv_obj_t *>(var), v, LV_ANIM_OFF);
+                    },
+                    0, 100, opt);
+          fx::tween(id(fx_bar), [](void *, int32_t) {}, 0, 1);
+          fx::cancel_tween(id(fx_bar), [](void *, int32_t) {});
+
+          // curve helpers used by later phases
+          (void) fx::curve_step(fx::Curve::EASE_OUT, 512);
+          (void) fx::curve_path(fx::Curve::EASE_IN);
+  - interval: 2s
+    then:
+      - lambda: |-
+          // ---- P2: built-in effects on every kind of target (lv_obj_t * and compound widgets) ----
+          fx::play(id(fx_obj), fx::PULSE);
+          fx::play(id(fx_obj), fx::SHAKE);
+          fx::play(id(fx_obj), fx::NUDGE_UP);
+          fx::play(id(fx_obj), fx::NUDGE_DOWN);
+          fx::play(id(fx_obj), fx::NUDGE_LEFT);
+          fx::play(id(fx_obj), fx::NUDGE_RIGHT);
+          fx::play(id(fx_label), fx::FLASH);   // label: text color
+          fx::play(id(fx_image), fx::FLASH);   // image: recolor
+          fx::play(id(fx_obj), fx::FLASH);     // anything else: background
+          fx::play(id(fx_obj), fx::GLOW);
+          fx::play(id(fx_label), fx::BLINK);
+          fx::play(id(fx_dropdown), fx::PULSE);
+          fx::play(id(fx_obj), fx::PULSE, fx::Opt{nullptr, true});  // force
+          fx::play(id(fx_obj), fx::PULSE, {.transition = nullptr, .force = true});
+          fx::stop(id(fx_obj), fx::PULSE);
+          fx::stop(id(fx_dropdown), fx::PULSE);
+          fx::stop(id(fx_obj));
+          fx::stop(id(fx_dropdown));
+
+          // ---- user effects: the const-table format a later phase generates ----
+          // Multi-track with delays, curves and a flash property; partial overrides only list what they change.
+          static const fx::Track heat_tracks[] = {
+              {.kind = fx::TrackKind::NUDGE, .duration = 220, .y = -2},
+              {.kind = fx::TrackKind::FLASH, .curve = fx::Curve::EASE_IN, .delay = 60, .duration = fx::DUR_NORMAL,
+               .property = fx::FlashProp::BG_COLOR, .color = 0xFF8800, .amount = 25},
+              {.kind = fx::TrackKind::PULSE, .delay = 20, .scale = 105},
+              {.kind = fx::TrackKind::SHAKE, .distance = 3, .cycles = 3, .axis = fx::Axis::Y},
+              {.kind = fx::TrackKind::GLOW, .opacity = 80},
+              {.kind = fx::TrackKind::BLINK, .curve = fx::Curve::EASE_IN_OUT, .opacity = 40},
+          };
+          // repeat N, cooldown, defer, retrigger ignore
+          static const fx::EffectDef heat = {.tracks = heat_tracks, .track_count = 6,
+                                             .retrigger = fx::Retrigger::IGNORE,
+                                             .when_suppressed = fx::WhenSuppressed::DEFER,
+                                             .repeat = 3, .repeat_delay = 100, .cooldown = 2500,
+                                             .defer_timeout = 1500};
+          // infinite loop (an "on" state), policy always
+          static const fx::Track warn_tracks[] = {{.kind = fx::TrackKind::BLINK, .duration = fx::DUR_SLOW,
+                                                   .opacity = 35}};
+          static const fx::EffectDef warning_blink = {.tracks = warn_tracks, .track_count = 1,
+                                                      .policy = fx::EffectPolicy::ALWAYS,
+                                                      .repeat = fx::REPEAT_INFINITE, .repeat_delay = 400};
+          // effect-level then (not for loops)
+          static const fx::Track confirm_tracks[] = {{.kind = fx::TrackKind::FLASH, .duration = 340}};
+          static const fx::EffectDef confirm = {.tracks = confirm_tracks, .track_count = 1, .then = &heat};
+          // a loop as `then` is refused at run time
+          static const fx::EffectDef bad_then = {.tracks = confirm_tracks, .track_count = 1, .then = &warning_blink};
+
+          fx::play(id(fx_obj), &heat);
+          fx::play(id(fx_obj), &heat);                       // retrigger ignore, cooldown
+          fx::play(id(fx_obj), &heat, {.force = true});
+          fx::play(id(fx_obj), &warning_blink);              // loop on
+          fx::play(id(fx_obj), &warning_blink);              // already on: no-op
+          fx::play(id(fx_dropdown), &warning_blink, {.force = true});
+          fx::play(id(fx_obj), &confirm);
+          fx::play(id(fx_obj), &bad_then);
+          fx::stop(id(fx_obj), &warning_blink);              // loop off, offsets back to rest
+          fx::stop(id(fx_obj), &heat);
+          fx::stop(id(fx_obj));                              // everything, including a deferred effect
+
+          // ---- presets (built-in magnitudes) and effect defaults (option defaults) ----
+          static const fx::Track strong_pulse = {.kind = fx::TrackKind::PULSE, .duration = 300, .scale = 125};
+          static const fx::Track red_flash = {.kind = fx::TrackKind::FLASH, .color = 0xFF0000};
+          fx::set_preset(fx::PULSE, &strong_pulse);
+          fx::set_preset(fx::FLASH, &red_flash);
+          fx::play(id(fx_obj), fx::PULSE);
+          fx::set_preset(fx::PULSE, nullptr);
+          fx::set_preset(fx::FLASH, nullptr);
+          fx::effect_defaults().cooldown = 500;
+          fx::effect_defaults().when_suppressed = fx::WhenSuppressed::DEFER;
+          fx::effect_defaults().retrigger = fx::Retrigger::IGNORE;
+          fx::effect_defaults().policy = fx::EffectPolicy::NORMAL;
+          fx::effect_defaults().defer_timeout = 2000;
+          fx::effect_defaults().repeat = 1;
+          fx::effect_defaults().repeat_delay = 50;
+          fx::play(id(fx_obj), fx::BLINK);
+          fx::effect_defaults() = fx::EffectOptions{};
+          fx::motion().intensity = 0.5f;
+          fx::play(id(fx_obj), fx::SHAKE);
+          fx::motion().intensity = 0.8f;
+          fx::stop(id(fx_obj));
+
+          // ---- transition `then`: every kind of transition ends by playing an effect on the same target ----
+          static const fx::PropTransition quick = {.duration = 60, .curve = fx::Curve::LINEAR,
+                                                   .style = fx::Style::FADE, .from = 50};
+          static const fx::TransitionDef with_then = {{&quick, &quick, &quick, &quick, &quick, &quick, &quick},
+                                                      &confirm};
+          fx::set_visible(id(fx_obj), false, fx::Opt{&with_then});    // hide, then
+          fx::set_visible(id(fx_obj), true, fx::Opt{&with_then});     // show, then
+          fx::set_opacity(id(fx_obj), 100, fx::Opt{&with_then});      // opacity, then
+          fx::set_color(id(fx_obj), lv_color_hex(0x336699), fx::Opt{&with_then});
+          fx::set_rotation(id(fx_obj), 45.0f, fx::Opt{&with_then});
+          fx::set_x(id(fx_obj), 40, fx::Opt{&with_then});             // slot-less
+          fx::set_y(id(fx_obj), 40, fx::Opt{&with_then});
+          fx::set_value(id(fx_bar), 90.0f, fx::Opt{&with_then});
+          fx::set_text(id(fx_label), "then", fx::Opt{&with_then});    // text fade
+          fx::stop(id(fx_obj));  // finishes the transitions without playing `then`
+
+          // ---- color channel rules ----
+          fx::set_color(id(fx_image), lv_color_hex(0x00ff00));
+          fx::play(id(fx_image), fx::FLASH);                    // the tint survives the flash
+          fx::set_color(id(fx_image), lv_color_hex(0x00ff00));
+          static const fx::Track bg_flash_tracks[] = {{.kind = fx::TrackKind::FLASH,
+                                                       .property = fx::FlashProp::BG_COLOR}};
+          static const fx::EffectDef bg_flash = {.tracks = bg_flash_tracks, .track_count = 1};
+          fx::play(id(fx_label), &bg_flash);                    // label flash through bg_color ...
+          fx::set_color(id(fx_label), lv_color_hex(0xff0000));  // ... set_color still means text color
+          static const fx::Track text_flash_tracks[] = {{.kind = fx::TrackKind::FLASH,
+                                                         .property = fx::FlashProp::TEXT_COLOR}};
+          static const fx::EffectDef text_flash = {.tracks = text_flash_tracks, .track_count = 1};
+          static const fx::Track img_flash_tracks[] = {{.kind = fx::TrackKind::FLASH,
+                                                        .property = fx::FlashProp::IMAGE_RECOLOR}};
+          static const fx::EffectDef img_flash = {.tracks = img_flash_tracks, .track_count = 1};
+          static const fx::Track shake_x_tracks[] = {{.kind = fx::TrackKind::SHAKE, .axis = fx::Axis::X}};
+          static const fx::EffectDef shake_x = {.tracks = shake_x_tracks, .track_count = 1};
+          fx::play(id(fx_label), &text_flash);
+          fx::play(id(fx_image), &img_flash);
+          fx::play(id(fx_obj), &shake_x);
+          fx::stop(id(fx_label));
+          fx::stop(id(fx_image));
+          fx::stop(id(fx_obj));
+
+  # ---- P3: transition styles ----
+  - interval: 2500ms
+    then:
+      - lambda: |-
+          // Entries list only what they say; everything else resolves against the defaults and the built-ins.
+          static const fx::PropTransition up = {.style = fx::Style::SLIDE_UP};
+          static const fx::PropTransition down = {.style = fx::Style::SLIDE_DOWN, .distance = 20};
+          static const fx::PropTransition left = {.duration = 300, .delay = 20, .curve = fx::Curve::EASE_IN_OUT,
+                                                  .style = fx::Style::SLIDE_LEFT, .distance = 30};
+          static const fx::PropTransition right = {.style = fx::Style::SLIDE_RIGHT};
+          static const fx::PropTransition zoom = {.style = fx::Style::ZOOM};
+          static const fx::PropTransition zoom_far = {.style = fx::Style::ZOOM, .from = 60};
+          static const fx::PropTransition none = {.style = fx::Style::NONE};
+          static const fx::PropTransition split = {.style = fx::Style::SLIDE_UP, .hide_style = fx::Style::FADE};
+          static const fx::PropTransition split_rev = {.style = fx::Style::FADE, .hide_style = fx::Style::ZOOM};
+          static const fx::PropTransition instant = {.duration = 0, .style = fx::Style::SLIDE_UP};
+          static const fx::TransitionDef t_up = {{&up, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr}, nullptr};
+          static const fx::TransitionDef t_down = {{&down, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                   nullptr};
+          static const fx::TransitionDef t_left = {{&left, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                   nullptr};
+          static const fx::TransitionDef t_right = {{&right, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                    nullptr};
+          static const fx::TransitionDef t_zoom = {{&zoom, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                   nullptr};
+          static const fx::TransitionDef t_zoom_far = {{&zoom_far, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                                        nullptr}, nullptr};
+          static const fx::TransitionDef t_none = {{&none, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                   nullptr};
+          static const fx::TransitionDef t_split = {{&split, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                    nullptr};
+          static const fx::TransitionDef t_split_rev = {{&split_rev, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                                         nullptr}, nullptr};
+          static const fx::TransitionDef t_instant = {{&instant, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                                       nullptr}, nullptr};
+          lv_obj_t *card = id(fx_card);
+
+          // every visible style, hide then show
+          const fx::TransitionRef styles[] = {&t_up, &t_down, &t_left, &t_right, &t_zoom, &t_zoom_far, &t_none,
+                                              &t_split, &t_split_rev, &t_instant};
+          for (fx::TransitionRef t : styles) {
+            fx::set_visible(card, false, fx::Opt{t});
+            fx::set_visible(card, true, fx::Opt{t});
+          }
+
+          // show/hide split with a reversal in the middle of the hide and of the show
+          fx::set_visible(card, false, fx::Opt{&t_split});
+          fx::set_visible(card, true, fx::Opt{&t_split});
+          fx::set_visible(card, false, fx::Opt{&t_split_rev});
+          fx::set_visible(card, true, fx::Opt{&t_split_rev});
+          fx::set_visible(card, false, fx::Opt{&t_down});    // hide mid-show of another style: keeps the running style
+          fx::set_visible(card, true, fx::Opt{&t_zoom});
+          fx::set_opacity(card, 120, fx::Opt{&t_up});        // set_opacity inside a slide entry ends its offsets
+          fx::set_opacity(card, LV_OPA_COVER);
+          fx::stop(card);                                    // snaps: offsets 0, shown
+
+          // stop() during a hide: HIDDEN is set, offsets are 0, `then` does not play
+          static const fx::Track confirm_tracks[] = {{.kind = fx::TrackKind::PULSE}};
+          static const fx::EffectDef confirm = {.tracks = confirm_tracks, .track_count = 1};
+          static const fx::TransitionDef t_up_then = {{&up, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr},
+                                                      &confirm};
+          fx::set_visible(card, false, fx::Opt{&t_up_then});
+          fx::stop(card);
+          fx::set_visible(card, true, fx::Opt{&t_up_then});   // `then` after a styled transition
+          fx::set_visible(card, false, fx::Opt{&t_instant});  // duration 0: instant, then still plays
+          fx::set_visible(card, true, fx::Opt{&t_up_then, true});
+          fx::stop(card);
+          fx::set_visible(card, true, {.transition = &t_zoom, .force = true});
+          fx::play(card, fx::PULSE);                          // zoom entry and pulse compose
+          fx::set_visible(card, false, fx::Opt{&t_zoom});
+          fx::stop(card);
+
+          // text styles
+          static const fx::PropTransition roll = {.style = fx::Style::ROLL};
+          static const fx::PropTransition roll_far = {.duration = 140, .style = fx::Style::ROLL, .from = 50,
+                                                      .distance = 20};
+          static const fx::PropTransition count = {.style = fx::Style::COUNT};
+          static const fx::PropTransition count_one = {.duration = 400, .curve = fx::Curve::EASE_OUT,
+                                                       .style = fx::Style::COUNT, .format = "%.1f"};
+          static const fx::PropTransition count_unit = {.style = fx::Style::COUNT, .format = "T %.0f C"};
+          static const fx::PropTransition count_g = {.style = fx::Style::COUNT, .format = "%g"};  // not %f: no count
+          static const fx::PropTransition fade_far = {.style = fx::Style::FADE, .from = 20};
+          static const fx::PropTransition text_none = {.style = fx::Style::NONE};
+          static const fx::PropTransition text_slide = {.style = fx::Style::SLIDE_UP};  // not a text style: fade
+          static const fx::PropTransition text_format = {.format = "%05.1f"};            // fade with a format
+          static const fx::TransitionDef t_roll = {{nullptr, nullptr, nullptr, &roll, nullptr, nullptr, nullptr},
+                                                   nullptr};
+          static const fx::TransitionDef t_roll_far = {{nullptr, nullptr, nullptr, &roll_far, nullptr, nullptr,
+                                                        nullptr}, nullptr};
+          static const fx::TransitionDef t_count = {{nullptr, nullptr, nullptr, &count, nullptr, nullptr, nullptr},
+                                                    nullptr};
+          static const fx::TransitionDef t_count_one = {{nullptr, nullptr, nullptr, &count_one, nullptr, nullptr,
+                                                         nullptr}, nullptr};
+          static const fx::TransitionDef t_count_then = {{nullptr, nullptr, nullptr, &count, nullptr, nullptr,
+                                                          nullptr}, &confirm};
+          static const fx::TransitionDef t_count_unit = {{nullptr, nullptr, nullptr, &count_unit, nullptr, nullptr,
+                                                          nullptr}, nullptr};
+          static const fx::TransitionDef t_count_g = {{nullptr, nullptr, nullptr, &count_g, nullptr, nullptr,
+                                                       nullptr}, nullptr};
+          static const fx::TransitionDef t_fade_far = {{nullptr, nullptr, nullptr, &fade_far, nullptr, nullptr,
+                                                        nullptr}, nullptr};
+          static const fx::TransitionDef t_text_none = {{nullptr, nullptr, nullptr, &text_none, nullptr, nullptr,
+                                                         nullptr}, nullptr};
+          static const fx::TransitionDef t_text_slide = {{nullptr, nullptr, nullptr, &text_slide, nullptr, nullptr,
+                                                          nullptr}, nullptr};
+          static const fx::TransitionDef t_text_format = {{nullptr, nullptr, nullptr, &text_format, nullptr, nullptr,
+                                                           nullptr}, nullptr};
+          lv_obj_t *label = id(fx_number);
+
+          fx::set_text(label, "5", fx::Opt{&t_roll});         // roll: number grows -> from below
+          fx::set_text(label, "3", fx::Opt{&t_roll});         // shrinks -> from above
+          fx::set_text(label, "12 km", fx::Opt{&t_roll_far});
+          fx::set_text(label, "12 mi", fx::Opt{&t_roll});     // same number: fade
+          fx::set_text(label, "n/a", fx::Opt{&t_roll});       // not a number: fade
+          fx::set_text(label, "-4.5", fx::Opt{&t_roll});
+          fx::set_text(label, "7", fx::Opt{&t_fade_far});
+          fx::set_text(label, "8", fx::Opt{&t_text_none});    // instant
+          fx::set_text(label, "9", fx::Opt{&t_text_slide});
+          fx::set_text(label, "10", fx::Opt{&t_count});       // `count` through set_text: fade
+          fx::stop(label);
+
+          // set_value on a label: format once (fade by default), roll on a number, count, NaN
+          fx::set_value(label, 12.0f);
+          fx::set_value(label, 12.0f);                        // same text: nothing
+          fx::set_value(label, 41.6f);
+          fx::set_value(label, 7.0f, fx::Opt{&t_roll});
+          fx::set_value(label, 3.14159f, fx::Opt{&t_text_format});
+          fx::set_value(label, NAN);                          // "--" at once
+          fx::set_value(label, NAN);
+          fx::set_value(label, 100.0f, fx::Opt{&t_count});    // no number to start from: fade
+          fx::set_value(label, 250.0f, fx::Opt{&t_count});    // counts 100 -> 250
+          fx::set_value(label, 80.0f, fx::Opt{&t_count});     // retarget mid-count, from the shown number
+          fx::set_value(label, 80.0f, fx::Opt{&t_count});     // same target: nothing
+          fx::stop(label);                                    // snaps to the final number
+          fx::set_value(label, 99.5f, fx::Opt{&t_count_one});
+          fx::set_value(label, -12.25f, fx::Opt{&t_count_one});
+          fx::set_value(label, 1.0e12f, fx::Opt{&t_count_one});  // beyond the fixed-point range: no count
+          fx::set_value(label, 5.0f, fx::Opt{&t_count_then});
+          fx::set_value(label, 0.0f, fx::Opt{&t_count_unit});    // prefix/suffix in the format
+          fx::set_value(label, 55.0f, fx::Opt{&t_count_unit});
+          fx::set_value(label, 2.5f, fx::Opt{&t_count_g});
+          fx::set_text(label, "again", fx::Opt{&t_roll});        // text replaces a running count
+          fx::set_value(label, 8.0f, fx::Opt{&t_count});
+          fx::set_value(label, 1.0f, fx::Opt{&t_roll_far});      // count replaced by a roll
+          fx::set_value(label, 9.0f, {.transition = &t_count, .force = true});
+          fx::set_value(label, 19.0f, fx::Opt{&t_count});
+          fx::set_value(id(fx_label), 3.0f);                     // a label inside a container
+
+          // a label that slides in while its text changes: separate instances, no fight over the offsets
+          fx::set_visible(label, false, fx::Opt{&t_split});
+          fx::set_visible(label, true, fx::Opt{&t_split});
+          fx::set_text(label, "21", fx::Opt{&t_roll});
+          fx::set_text(label, "22", fx::Opt{&t_roll});
+          fx::set_visible(label, false, fx::Opt{&t_left});
+          fx::set_visible(label, true, fx::Opt{&t_zoom});
+          fx::set_value(label, 23.0f, fx::Opt{&t_count});
+          fx::stop(label);
+
+          // count: a delta beyond the lv_anim int32 range is not counted (fade), a count retargeted to the text
+          // that is shown right now ends there
+          fx::set_value(label, 0.0f, fx::Opt{&t_count});
+          fx::set_value(label, 3000000.0f, fx::Opt{&t_count});   // too far for %.0f: plain text change
+          fx::set_value(label, 0.0f, fx::Opt{&t_count_one});
+          fx::set_value(label, 25000.0f, fx::Opt{&t_count_one});
+          fx::set_value(label, 0.0f, fx::Opt{&t_count});
+          fx::set_value(label, 100.0f, fx::Opt{&t_count});       // counting 0 -> 100
+          fx::set_text(label, lv_label_get_text(label), fx::Opt{&t_roll});   // same text: the count ends here
+          fx::set_value(label, 50.0f, fx::Opt{&t_count});
+          fx::set_value(label, 100.0f, fx::Opt{&t_count});
+          fx::set_value(label, 50.0f, fx::Opt{&t_count});        // equals the text on screen: count stops
+          fx::set_text(label, "50", fx::Opt{&t_roll});
+
+          // defaults resolution: an entry that only has hide_style, a text delay, a distance beyond the limit
+          static const fx::PropTransition only_hide = {.hide_style = fx::Style::ZOOM};
+          static const fx::PropTransition delayed_roll = {.delay = 50, .style = fx::Style::ROLL, .distance = 5000};
+          static const fx::TransitionDef defaults_def = {{&only_hide, nullptr, nullptr, &delayed_roll, nullptr,
+                                                          nullptr, nullptr}, nullptr};
+          fx::detail::core().defaults = &defaults_def;
+          fx::set_visible(card, false);                          // zoom hide from the defaults, fade show
+          fx::set_visible(card, true);
+          fx::set_visible(card, false, fx::Opt{&t_up});          // its own style beats the defaults
+          fx::set_visible(card, true, fx::Opt{&t_up});
+          fx::set_text(label, "60");                             // delayed roll with a clamped distance
+          fx::set_text(label, "61");
+          fx::detail::core().defaults = nullptr;
+          fx::stop(card);
+          fx::stop(label);
+
+          // a delayed text animation must not survive a later one (count, undelayed fade)
+          static const fx::PropTransition late_fade = {.delay = 100, .style = fx::Style::FADE};
+          static const fx::TransitionDef t_late = {{nullptr, nullptr, nullptr, &late_fade, nullptr, nullptr, nullptr},
+                                                   nullptr};
+          fx::set_text(label, "5", fx::Opt{&t_late});
+          fx::set_value(label, 80.0f, fx::Opt{&t_count});
+          fx::set_text(label, "6", fx::Opt{&t_late});
+          fx::set_text(label, "7");
+          fx::set_text(label, "8", fx::Opt{&t_late});
+          fx::set_text(label, "9", fx::Opt{&t_roll});
+          fx::stop(label);
+
+          // a plain opacity fade, then a slide hide on top of it (the hide fades only), set_opacity during a hide
+          fx::set_opacity(card, 100);
+          fx::set_visible(card, false, fx::Opt{&t_up});
+          fx::set_opacity(card, 200);
+          fx::set_visible(card, true, fx::Opt{&t_up});
+          fx::stop(card);
+
+          // policy: no motion while disabled, the final state stays exact
+          fx::set_enabled(false);
+          fx::set_visible(card, false, fx::Opt{&t_up});
+          fx::set_visible(card, true, fx::Opt{&t_up});
+          fx::set_text(label, "off", fx::Opt{&t_roll});
+          fx::set_value(label, 123.0f, fx::Opt{&t_count});
+          fx::set_enabled(true);
+
+  # suppress_when is evaluated once per main-loop iteration, so the popup flag must change in a different iteration than
+  # the plays: suppress in one interval, play in the next, release in a later one.
+  - interval: 3s
+    then:
+      - lambda: |-
+          id(popup_open) = true;
+  - interval: 3500ms
+    then:
+      - lambda: |-
+          // suppressed now: the deferred pulse is kept, the loop is remembered but rests, the blink is skipped
+          static const fx::Track pulse_tracks[] = {{.kind = fx::TrackKind::PULSE}};
+          static const fx::EffectDef deferred_pulse = {.tracks = pulse_tracks, .track_count = 1,
+                                                       .when_suppressed = fx::WhenSuppressed::DEFER,
+                                                       .defer_timeout = 1000};
+          static const fx::Track loop_tracks[] = {{.kind = fx::TrackKind::BLINK, .duration = fx::DUR_SLOW,
+                                                   .opacity = 35}};
+          static const fx::EffectDef paused_loop = {.tracks = loop_tracks, .track_count = 1,
+                                                    .repeat = fx::REPEAT_INFINITE};
+          fx::play(id(fx_obj), &deferred_pulse);
+          fx::play(id(fx_obj), &paused_loop);
+          fx::play(id(fx_label), fx::BLINK);
+  - interval: 4s
+    then:
+      - lambda: |-
+          id(popup_open) = false;  // loop() plays the deferred pulse and resumes the loop from phase 0
+          fx::stop(id(fx_obj));    // (the next round starts clean)
+  - interval: 5s
+    then:
+      - lvgl_fx.start: fx_main
+      - lvgl_fx.start:
+
+  # ---- P4: the YAML actions (no lambda needed for any of this) ----
+  - interval: 3s
+    then:
+      - lvgl_fx.set: { id: fx_obj, visible: true }
+      - lvgl_fx.set: { id: fx_obj, visible: true, instant: !lambda "return id(popup_open);" }
+      - lvgl_fx.set: { id: fx_bar, value: 42, instant: true }
+      - lvgl_fx.set: { id: fx_card, visible: false, transition: card }
+      - lvgl_fx.set: { id: fx_card, visible: true, transition: card, force: true }
+      - lvgl_fx.set:
+          id: fx_card
+          visible: !lambda "return id(popup_open);"
+          force: !lambda "return !id(popup_open);"
+      - lvgl_fx.set: { id: fx_obj, opacity: 50% }
+      - lvgl_fx.set: { id: fx_obj, opacity: 0.25, transition: everything }
+      - lvgl_fx.set: { id: fx_obj, opacity: !lambda "return 128;" }
+      - lvgl_fx.set: { id: fx_bar, value: 42 }
+      - lvgl_fx.set: { id: fx_arc, value: !lambda "return id(popup_open) ? 12.5f : 150.0f;", transition: gauge_slow }
+      - lvgl_fx.set: { id: fx_slider, value: 7.5, force: true }
+      - lvgl_fx.set: { id: fx_image, value: 45 }           # an image: rotation in degrees
+      - lvgl_fx.set: { id: fx_number, value: 12.5, transition: counter }   # a label: a number
+      - lvgl_fx.set: { id: fx_label, text: "hello" }
+      - lvgl_fx.set: { id: fx_label, text: !lambda 'return std::string("x");', transition: gear_roll }
+      - lvgl_fx.set:
+          id: fx_label
+          text:
+            format: "%d"
+            args: [ 'id(popup_open) ? 1 : 0' ]
+          force: true
+      - lvgl_fx.set: { id: fx_label, color: red }
+      - lvgl_fx.set: { id: fx_image, color: fx_red }
+      - lvgl_fx.set: { id: fx_obj, color: 0x336699, transition: everything }
+      - lvgl_fx.set: { id: fx_obj, color: !lambda "return lv_color_hex(0x112233);" }
+      - lvgl_fx.set: { id: fx_obj, x: 20 }
+      - lvgl_fx.set: { id: fx_obj, x: !lambda "return id(popup_open) ? 5 : 15;", transition: prnd_move }
+      - lvgl_fx.set: { id: fx_obj, y: -4, force: true }
+      - lvgl_fx.set: { id: fx_obj, y: !lambda "return 30;" }
+      - lvgl_fx.set: { id: fx_obj, rotation: 90 }
+      - lvgl_fx.set: { id: fx_obj, rotation: !lambda "return 12.5f;", transition: everything }
+      - lvgl_fx.set: { id: fx_dropdown, visible: true }      # a compound widget
+      - lvgl_fx.play: { id: fx_obj, effect: pulse }
+      - lvgl_fx.play: { id: fx_obj, effect: shake, force: true }
+      - lvgl_fx.play: { id: fx_obj, effect: nudge_up }
+      - lvgl_fx.play: { id: fx_obj, effect: nudge_down }
+      - lvgl_fx.play: { id: fx_obj, effect: nudge_left }
+      - lvgl_fx.play: { id: fx_obj, effect: nudge_right }
+      - lvgl_fx.play: { id: fx_label, effect: flash }
+      - lvgl_fx.play: { id: fx_obj, effect: glow }
+      - lvgl_fx.play: { id: fx_obj, effect: blink }
+      - lvgl_fx.play: { id: fx_obj, effect: heat_up }
+      - lvgl_fx.play: { id: fx_obj, effect: warning_blink, force: !lambda "return true;" }
+      - lvgl_fx.play: { id: fx_dropdown, effect: chain_third }
+      - lvgl_fx.stop: { id: fx_obj, effect: warning_blink }
+      - lvgl_fx.stop: { id: fx_obj, effect: pulse }
+      - lvgl_fx.stop: { id: fx_obj }
+      - lvgl_fx.stop: fx_label
+      - lvgl_fx.start:
+      - lvgl_fx.start: fx_main
+      - lvgl_fx.start: { id: fx_main }
+      - lvgl_fx.set_enabled: true
+      - lvgl_fx.set_enabled: !lambda return !id(popup_open);
+      - lvgl_fx.set_enabled: { value: true }
+      - lvgl_fx.set_reduced_motion: false
+      - lvgl_fx.set_reduced_motion: !lambda return id(popup_open);
+      # ids of effects and transitions are plain C++ values in lambdas
+      - lambda: |-
+          fx::play(id(fx_obj), id(heat_up));
+          fx::stop(id(fx_obj), id(warning_blink));
+          fx::set_value(id(fx_bar), 5.0f, fx::Opt{id(gauge_slow)});
+          fx::set_x(id(fx_obj), 3, {.transition = id(prnd_move), .force = true});
+
+# ---- P4: actions with trigger arguments (`x` is the sensor value in every lambda) ----
+sensor:
+  - platform: template
+    id: fx_sensor
+    update_interval: never
+    on_value:
+      then:
+        - lvgl_fx.set:
+            id: fx_bar
+            value: !lambda return x;
+            force: !lambda return x > 3;
+        - lvgl_fx.set:
+            id: fx_label
+            text:
+              format: "%.1f"
+              args: [ x ]
+            transition: defaults
+        - lvgl_fx.set: { id: fx_obj, opacity: !lambda "return x > 50 ? 255 : 100;" }
