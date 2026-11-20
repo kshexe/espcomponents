@@ -224,6 +224,13 @@ uartex:
     ascii: false  # Set true for ASCII format
 ```
 
+`version` reports the espcomponents release the firmware was compiled from.
+When the built commit is tagged (for example `ref: v261119` or `ref: latest`
+in `external_components`), it shows the tag name such as `v261119`. An
+untagged commit (e.g. tracking the default branch between releases) shows
+the short commit hash, and a local checkout shows `git describe` output such
+as `v261119-3-gabc1234`. `unknown` means git was not available.
+
 #### Event Triggers
 
 ```yaml

@@ -7,6 +7,7 @@
 #include <vector>
 #include "codec.h"
 #include "dtmf.h"
+#include "rtp_keepalive.h"
 #include "esphome/components/socket/socket.h"
 
 namespace esphome {
@@ -22,9 +23,22 @@ class RtpSession {
   void set_codec(Codec *codec) { this->codec_ = codec; }
   void set_dtmf_payload_type(int pt) { this->dtmf_pt_ = pt; }
   void set_remote(const std::string &ip, uint16_t port);
+  // Idle silence interval in ms (0 = continuous 20 ms silence while idle).
+  void set_keepalive_ms(uint32_t ms) { this->keepalive_.configure(ms); }
 
   void set_on_audio(std::function<void(const int16_t *, size_t)> &&cb) { this->on_audio_ = std::move(cb); }
   void set_on_dtmf(std::function<void(char)> &&cb) { this->on_dtmf_ = std::move(cb); }
+
+  // Media direction gates (SDP hold, RFC 3264 §8.4). The socket stays open in
+  // every state so the NAT mapping and the peer's address latching survive.
+  // Send off: no RTP leaves (mic audio, idle silence / keepalive, DTMF). Receive
+  // off: incoming audio is read and dropped (not decoded, not played). Both
+  // default to on and persist across start(): set them before start() when a
+  // session is (re)started in a held state.
+  void set_send_enabled(bool enabled);
+  void set_receive_enabled(bool enabled) { this->receive_enabled_ = enabled; }
+  bool send_enabled() const { return this->send_enabled_; }
+  bool receive_enabled() const { return this->receive_enabled_; }
 
   bool start(uint16_t local_port);
   void stop();
@@ -57,6 +71,8 @@ class RtpSession {
   struct sockaddr_storage remote_addr_;
   socklen_t remote_addr_len_{0};
   bool remote_set_{false};
+  bool send_enabled_{true};
+  bool receive_enabled_{true};
 
   Codec *codec_{nullptr};
   int dtmf_pt_{101};
@@ -69,6 +85,7 @@ class RtpSession {
   std::vector<int16_t> tx_buffer_;
   std::mutex tx_mutex_;
   uint32_t last_tx_ms_{0};
+  RtpKeepalive keepalive_{};
   uint32_t last_audio_tx_ms_{0};   // last real (non-silence) frame sent
   std::vector<int16_t> silence_pcm_;  // one frame of zeroed PCM, sized on start()
 

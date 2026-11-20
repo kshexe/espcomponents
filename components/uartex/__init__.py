@@ -1,3 +1,6 @@
+import subprocess
+from pathlib import Path
+
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import uart, text_sensor
@@ -249,11 +252,86 @@ CONFIG_SCHEMA = cv.All(cv.Schema({
     }),
 }).extend(cv.COMPONENT_SCHEMA).extend(uart.UART_DEVICE_SCHEMA), cv.has_at_most_one_key(CONF_RX_LENGTH, CONF_RX_DATA_LENGTH), cv.has_at_most_one_key(CONF_RX_CHECKSUM, CONF_RX_CHECKSUM_2), cv.has_at_most_one_key(CONF_TX_CHECKSUM, CONF_TX_CHECKSUM_2))
 
+def _git(cwd, *args, timeout=5):
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def _pick_tag(tags):
+    # "latest" is a moving alias of the newest release; prefer the real name.
+    tags = [t for t in tags if t and t != "latest"]
+    versioned = [t for t in tags if t.startswith("v")]
+    return max(versioned or tags) if (versioned or tags) else None
+
+
+def _repo_version(cwd=None):
+    """Version of the espcomponents checkout this component was loaded from.
+
+    Returns the release tag (e.g. v261119) when HEAD is a tagged commit,
+    otherwise the `git describe` result (v261119-3-gabc1234 in a full
+    checkout, the short commit hash in a shallow one).
+
+    external_components clones with --depth=1 and fetches `ref:` without
+    creating local tags, so for shallow clones the tag is looked up on the
+    remote with `git ls-remote`.
+    """
+    cwd = cwd or Path(__file__).resolve().parent
+    try:
+        head = _git(cwd, "rev-parse", "HEAD")
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+
+    try:
+        dirty = _git(cwd, "status", "--porcelain", "--untracked-files=no") != ""
+    except (OSError, subprocess.SubprocessError):
+        dirty = False
+    suffix = "-dirty" if dirty else ""
+
+    try:
+        tag = _pick_tag(_git(cwd, "tag", "--points-at", "HEAD").splitlines())
+    except (OSError, subprocess.SubprocessError):
+        tag = None
+
+    if tag is None:
+        try:
+            shallow = _git(cwd, "rev-parse", "--is-shallow-repository") == "true"
+        except (OSError, subprocess.SubprocessError):
+            shallow = False
+        if shallow:
+            try:
+                remote = _git(cwd, "ls-remote", "--tags", "origin", timeout=15)
+            except (OSError, subprocess.SubprocessError):
+                remote = ""
+            tags = []
+            for line in remote.splitlines():
+                sha, _, ref = line.partition("\t")
+                if sha != head or not ref.startswith("refs/tags/"):
+                    continue
+                tags.append(ref[len("refs/tags/"):].removesuffix("^{}"))
+            tag = _pick_tag(tags)
+
+    if tag is not None:
+        return tag + suffix
+
+    try:
+        return _git(cwd, "describe", "--tags", "--always", "--dirty") or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return head[:7]
+
+
 async def to_code(config):
     cg.add_global(uartex_ns.using)
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
+    cg.add(var.set_version_str(_repo_version()))
 
     if CONF_VERSION in config:
         if not config[CONF_VERSION][CONF_DISABLED]:

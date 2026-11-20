@@ -59,6 +59,24 @@ void RtpSession::set_remote(const std::string &ip, uint16_t port) {
   this->remote_set_ = this->remote_addr_len_ > 0;
 }
 
+void RtpSession::set_send_enabled(bool enabled) {
+  if (enabled == this->send_enabled_) return;
+  this->send_enabled_ = enabled;
+  if (!enabled) {
+    std::lock_guard<std::mutex> lock(this->tx_mutex_);
+    this->tx_buffer_.clear();
+    return;
+  }
+  // Resuming: treat it like a fresh start of sending. The grace period and the
+  // keepalive burst apply from now, and the next packet opens a new talkspurt.
+  if (this->socket_) {
+    this->last_tx_ms_ = millis();
+    this->last_audio_tx_ms_ = this->last_tx_ms_;
+    this->keepalive_.reset(this->last_tx_ms_);
+    this->first_packet_ = true;
+  }
+}
+
 bool RtpSession::start(uint16_t local_port) {
   this->stop();
   if (this->codec_ == nullptr) {
@@ -102,6 +120,7 @@ bool RtpSession::start(uint16_t local_port) {
   // Treat the session start as "just sent audio" so the grace period applies
   // from here; a session with no microphone starts emitting silence right after.
   this->last_audio_tx_ms_ = this->last_tx_ms_;
+  this->keepalive_.reset(this->last_tx_ms_);
   this->silence_pcm_.assign(this->pcm_samples_per_frame_(), 0);
   this->recv_buf_.resize(1500);
   ESP_LOGI(TAG, "RTP started on port %u (pt=%u %s, dtmf_pt=%d)", local_port,
@@ -128,7 +147,7 @@ void RtpSession::stop() {
 }
 
 void RtpSession::push_tx_audio(const int16_t *pcm, size_t samples) {
-  if (!this->socket_) return;
+  if (!this->socket_ || !this->send_enabled_) return;
   // ~1 s of PCM at the codec sample rate (8000 for G.711).
   const size_t tx_max =
       this->codec_ != nullptr ? static_cast<size_t>(this->codec_->desc().pcm_rate) : 8000;
@@ -145,6 +164,10 @@ void RtpSession::push_tx_audio(const int16_t *pcm, size_t samples) {
 }
 
 void RtpSession::queue_dtmf(const std::string &digits) {
+  if (!this->send_enabled_) {
+    ESP_LOGW(TAG, "Media is on hold (not sending); DTMF dropped");
+    return;
+  }
   if (this->dtmf_pt_ < 0) {
     ESP_LOGW(TAG, "Remote did not offer telephone-event; DTMF dropped");
     return;
@@ -212,6 +235,7 @@ void RtpSession::send_audio_packet_() {
   this->timestamp_ += ts_step;
   this->first_packet_ = false;
   this->last_audio_tx_ms_ = millis();
+  this->keepalive_.on_audio(this->last_audio_tx_ms_);
 }
 
 // Sends one frame of digital silence, keeping the RTP stream running when there
@@ -237,6 +261,7 @@ void RtpSession::send_silence_packet_() {
   this->seq_++;
   this->timestamp_ += ts_step;
   this->first_packet_ = false;
+  this->keepalive_.on_sent(millis());
 }
 
 void RtpSession::send_dtmf_packet_() {
@@ -267,6 +292,7 @@ void RtpSession::send_dtmf_packet_() {
                         reinterpret_cast<struct sockaddr *>(&this->remote_addr_),
                         this->remote_addr_len_);
   this->seq_++;
+  this->keepalive_.on_sent(millis());
 
   if (end) {
     this->dtmf_end_packets_++;
@@ -318,7 +344,7 @@ void RtpSession::receive_() {
       }
       continue;
     }
-    if (!this->on_audio_) continue;  // send-only / no speaker: skip decode
+    if (!this->on_audio_ || !this->receive_enabled_) continue;  // send-only / no speaker / held: skip decode
 
     size_t n = len - header_len;
     const size_t pcm_cap = this->codec_->desc().max_pcm_samples_for_payload(n);
@@ -335,6 +361,17 @@ void RtpSession::loop() {
   this->receive_();
 
   uint32_t now = millis();
+  if (!this->send_enabled_) {
+    // Held: send nothing, but keep the RTP clock on wall time so the stream
+    // resumes with a consistent timestamp (the next packet carries the marker).
+    this->dtmf_queue_.clear();
+    this->dtmf_active_ = false;
+    const uint32_t frames = (now - this->last_tx_ms_) / FRAME_MS;
+    this->timestamp_ += frames * this->ts_per_frame_();
+    this->last_tx_ms_ += frames * FRAME_MS;
+    this->first_packet_ = true;
+    return;
+  }
   if (now - this->last_tx_ms_ > 500) {
     bool tx_empty = true;
     {
@@ -372,6 +409,12 @@ void RtpSession::loop() {
         // boundary mid-speech. Wait for the real samples rather than splicing
         // silence into live audio.
         break;
+      } else if (!this->keepalive_.idle_frame_due(now)) {
+        // Thinned idle stream (rtp_keepalive): skip this slot but keep the RTP
+        // clock running on wall time, and mark the next packet as the start of
+        // a new talkspurt so the far end's jitter buffer resynchronises.
+        this->timestamp_ += this->ts_per_frame_();
+        this->first_packet_ = true;
       } else {
         // Nothing to send for a while: no microphone configured, or half-duplex
         // while listening. Keep the RTP stream running anyway, which is what a
