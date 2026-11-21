@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <vector>
 #include <queue>
 #include <string>
@@ -54,11 +55,12 @@ struct state_t
 struct state_num_t
 {
     uint16_t offset;
-    uint16_t length;    // 1~4
+    uint16_t length;    // 1~16
     uint16_t precision; // 0~5
     bool is_signed;
     ENDIAN endian;
     DECODE decode;
+    std::vector<uint8_t> mask;
     state_num_t() = default;
     state_num_t(
         uint16_t offset, 
@@ -66,8 +68,9 @@ struct state_num_t
         uint16_t precision = 0, 
         bool is_signed = true, 
         ENDIAN endian = ENDIAN_BIG, 
-        DECODE decode = DECODE_NONE)
-    : offset(offset), length(length), precision(precision), is_signed(is_signed), endian(endian), decode(decode) {}
+        DECODE decode = DECODE_NONE,
+        const std::vector<uint8_t>& mask = {})
+    : offset(offset), length(length), precision(precision), is_signed(is_signed), endian(endian), decode(decode), mask(mask) {}
 };
 
 struct cmd_t
@@ -75,13 +78,15 @@ struct cmd_t
     std::vector<uint8_t> data;
     std::vector<uint8_t> ack;
     std::vector<uint8_t> mask;
+    std::vector<uint16_t> preserve_state;
 
     cmd_t() = default;
     cmd_t(
         std::initializer_list<uint8_t> data, 
         std::initializer_list<uint8_t> ack = {}, 
-        std::initializer_list<uint8_t> mask = {})
-    : data(data), ack(ack), mask(mask) {}
+        std::initializer_list<uint8_t> mask = {},
+        std::initializer_list<uint16_t> preserve_state = {})
+    : data(data), ack(ack), mask(mask), preserve_state(preserve_state) {}
     cmd_t(
         const std::vector<uint8_t>& data,
         const std::vector<uint8_t>& ack = {},
@@ -109,9 +114,11 @@ public:
     void set_command(std::string name, std::function<cmd_t(const std::string& str)> &&f) { this->command_str_func_map_[name] = f; }
     void set_optimistic(bool optimistic) { this->optimistic_ = optimistic; }
     bool enqueue_tx_cmd(const cmd_t* cmd, bool low_priority = false);
-    const cmd_t* dequeue_tx_cmd();
-    const cmd_t* dequeue_tx_cmd_low_priority();
+    std::shared_ptr<const cmd_t> dequeue_tx_cmd();
+    std::shared_ptr<const cmd_t> dequeue_tx_cmd_low_priority();
     bool parse_data(const std::vector<uint8_t>& data);
+    bool render_command(const cmd_t &input, cmd_t &output) const;
+    void invalidate_matching_state(const std::vector<uint8_t> &data);
     bool has_last_state() const { return !this->last_state_.empty(); }
     std::vector<uint8_t> last_state();
     uint8_t last_state(const uint16_t index);
@@ -148,9 +155,10 @@ protected:
     
     bool rx_response_{false};
     bool optimistic_{false};
-    std::queue<const cmd_t*> tx_cmd_queue_{};
-    std::queue<const cmd_t*> tx_cmd_queue_low_priority_{};
+    std::queue<std::shared_ptr<const cmd_t>> tx_cmd_queue_{};
+    std::queue<std::shared_ptr<const cmd_t>> tx_cmd_queue_low_priority_{};
     std::vector<uint8_t> last_state_{};
+    bool preserve_state_ready_{false};
 };
 const char* find_mode(const std::vector<const char*>& modes, const std::string& target);
 template<typename KeyType, typename ValueType>
@@ -159,7 +167,7 @@ bool equal(const std::vector<uint8_t>& data1, const std::vector<uint8_t>& data2,
 bool equal_cmd(const cmd_t& a, const cmd_t& b);
 std::vector<uint8_t> apply_mask(const std::vector<uint8_t>& data, const state_t* state);
 bool verify_state(const std::vector<uint8_t>& data, const state_t* state);
-float state_to_float(const std::vector<uint8_t>& data, const state_num_t state);
+float state_to_float(const std::vector<uint8_t>& data, const state_num_t& state);
 uint8_t float_to_bcd(const float val);
 std::string to_hex_string(const std::vector<unsigned char>& data);
 std::string to_ascii_string(const std::vector<unsigned char>& data);

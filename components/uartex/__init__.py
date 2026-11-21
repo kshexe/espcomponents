@@ -6,6 +6,8 @@ import esphome.config_validation as cv
 from esphome.components import uart, text_sensor
 from esphome.components.text_sensor import register_text_sensor
 from esphome import automation, pins, core
+import esphome.final_validate as fv
+from .packet_validation import validate_packets
 from esphome.const import CONF_ID, CONF_OFFSET, CONF_DATA, CONF_TRIGGER_ID, \
     CONF_INVERTED, CONF_VERSION, CONF_NAME, CONF_OPTIMISTIC, CONF_ICON, CONF_ENTITY_CATEGORY, ICON_NEW_BOX
 from esphome.util import SimpleRegistry
@@ -29,6 +31,7 @@ UARTExWriteAction = uartex_ns.class_('UARTExWriteAction', automation.Action)
 cmd_t = uartex_ns.class_('cmd_t')
 state_t = uartex_ns.class_('state_t')
 state_num_t = uartex_ns.class_('state_num_t')
+automation_data_owner_t = uartex_ns.class_('automation_data_owner_t')
 vector_uint8 = cg.std_vector.template(cg.uint8)
 uint16_const = cg.uint16.operator('const')
 uint8_const = cg.uint8.operator('const')
@@ -148,16 +151,34 @@ def validate_rx_header(value):
     if isinstance(value, list):
         if not value:
             raise cv.Invalid("rx_header cannot be empty")
-        if isinstance(value[0], (list, dict)):
+        if any(isinstance(candidate, (list, dict)) for candidate in value):
             return [header_schema(h) for h in value]
         return [header_schema(value)]
     return [header_schema(value)]
 
-COMMAND_SCHEMA = cv.Schema({
+CONF_PRESERVE_STATE = "preserve_state"
+
+
+def validate_preserve_state_offset(value):
+    if isinstance(value, bool):
+        raise cv.Invalid("preserve_state offsets must be integers, not booleans")
+    return cv.int_range(min=0, max=65535)(value)
+
+
+def validate_preserve_state_offsets(config):
+    offsets = config.get(CONF_PRESERVE_STATE, [])
+    if len(offsets) != len(set(offsets)):
+        raise cv.Invalid("preserve_state offsets cannot contain duplicates")
+    if any(offset >= len(config[CONF_DATA]) for offset in offsets):
+        raise cv.Invalid("preserve_state offset exceeds command data")
+    return config
+
+COMMAND_SCHEMA = cv.All(cv.Schema({
     cv.Required(CONF_DATA): validate_hex_data,
     cv.Optional(CONF_ACK, default=[]): validate_hex_data,
-    cv.Optional(CONF_MASK, default=[]): validate_hex_data
-})
+    cv.Optional(CONF_MASK, default=[]): validate_hex_data,
+    cv.Optional(CONF_PRESERVE_STATE, default=[]): cv.Schema([validate_preserve_state_offset]),
+}), validate_preserve_state_offsets)
 
 def shorthand_command_hex(value):
     value = validate_hex_data(value)
@@ -178,9 +199,14 @@ RX_DATA_LENGTH_SCHEMA = cv.Schema({
 def rx_data_length_schema(value):
     return RX_DATA_LENGTH_SCHEMA(value)
 
+def reject_reply_copy(config):
+    if config.get(CONF_PRESERVE_STATE):
+        raise cv.Invalid("preserve_state requires an entity command")
+    return config
+
 RX_REPLY_SCHEMA = cv.Schema({
     cv.Required(CONF_STATE): state_schema,
-    cv.Required(CONF_COMMAND): cv.templatable(command_hex_schema),
+    cv.Required(CONF_COMMAND): cv.templatable(lambda value: reject_reply_copy(command_hex_schema(value))),
 })
 
 # UARTEx Schema
@@ -215,7 +241,7 @@ CONFIG_SCHEMA = cv.All(cv.Schema({
             cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(ReadTrigger),
         }
     ),
-    cv.Optional(CONF_RX_LENGTH): cv.int_range(min=1, max=256),
+    cv.Optional(CONF_RX_LENGTH): cv.templatable(cv.int_range(min=1, max=256)),
     cv.Optional(CONF_RX_DATA_LENGTH): rx_data_length_schema,
     cv.Optional(CONF_TX_CTRL_PIN): pins.gpio_output_pin_schema,
     cv.Optional(CONF_RX_HEADER): validate_rx_header,
@@ -251,6 +277,11 @@ CONFIG_SCHEMA = cv.All(cv.Schema({
         cv.Optional(CONF_ASCII, default=False): cv.boolean,
     }),
 }).extend(cv.COMPONENT_SCHEMA).extend(uart.UART_DEVICE_SCHEMA), cv.has_at_most_one_key(CONF_RX_LENGTH, CONF_RX_DATA_LENGTH), cv.has_at_most_one_key(CONF_RX_CHECKSUM, CONF_RX_CHECKSUM_2), cv.has_at_most_one_key(CONF_TX_CHECKSUM, CONF_TX_CHECKSUM_2))
+
+def FINAL_VALIDATE_SCHEMA(config):
+    validate_packets(config, fv.full_config.get().get_config_for_path([]))
+    return config
+
 
 def _git(cwd, *args, timeout=5):
     result = subprocess.run(
@@ -373,14 +404,17 @@ async def to_code(config):
 
     for conf in config.get(CONF_ON_WRITE, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [(uint8_ptr_const, 'data'), (uint16_const, 'len')], conf)
+        await automation.build_automation(trigger, [(uint8_ptr_const, 'data'), (uint16_const, 'len'), (automation_data_owner_t, '_uartex_data_owner')], conf)
 
     for conf in config.get(CONF_ON_READ, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)
-        await automation.build_automation(trigger, [(uint8_ptr_const, 'data'), (uint16_const, 'len')], conf)
+        await automation.build_automation(trigger, [(uint8_ptr_const, 'data'), (uint16_const, 'len'), (automation_data_owner_t, '_uartex_data_owner')], conf)
 
     if CONF_RX_LENGTH in config:
-        cg.add(var.set_rx_length(config[CONF_RX_LENGTH]))
+        length = config[CONF_RX_LENGTH]
+        if cg.is_template(length):
+            length = await cg.templatable(length, [(uint8_ptr_const, 'data'), (uint16_const, 'len')], cg.int16)
+        cg.add(var.set_rx_length(length))
 
     if CONF_RX_DATA_LENGTH in config:
         conf = config[CONF_RX_DATA_LENGTH]
@@ -464,6 +498,20 @@ async def to_code(config):
     if CONF_RX_PRIORITY in config:
         cg.add(var.set_rx_priority(config[CONF_RX_PRIORITY]))
 
+def reject_update_copy(config):
+    if config.get(CONF_PRESERVE_STATE):
+        raise cv.Invalid("preserve_state is not supported for command_update")
+    return config
+
+
+def _validate_entity_preserve_state(config):
+    for key, value in config.items():
+        if key.startswith("command_") and isinstance(value, dict) and value.get(CONF_PRESERVE_STATE):
+            if CONF_STATE not in config:
+                raise cv.Invalid("preserve_state requires an entity state filter", [key, CONF_PRESERVE_STATE])
+    return config
+
+
 # A schema to use for all UARTEx devices, all UARTEx integrations must extend this!
 UARTEX_DEVICE_SCHEMA = cv.Schema({
     cv.GenerateID(CONF_UARTEX_ID): uartex_declare_type,
@@ -472,10 +520,10 @@ UARTEX_DEVICE_SCHEMA = cv.Schema({
     cv.Optional(CONF_STATE_OFF): state_schema,
     cv.Optional(CONF_COMMAND_ON): cv.templatable(command_hex_schema),
     cv.Optional(CONF_COMMAND_OFF): cv.templatable(command_hex_schema),
-    cv.Optional(CONF_COMMAND_UPDATE): cv.templatable(command_hex_schema),
+    cv.Optional(CONF_COMMAND_UPDATE): cv.templatable(lambda value: reject_update_copy(command_hex_schema(value))),
     cv.Optional(CONF_STATE_RESPONSE): state_schema,
     cv.Optional(CONF_OPTIMISTIC, default=False): cv.boolean,
-}).extend(cv.polling_component_schema('60s'))
+}).extend(cv.polling_component_schema('60s')).add_extra(_validate_entity_preserve_state)
 
 STATE_NUM_SCHEMA = cv.Schema({
     cv.Required(CONF_OFFSET): cv.int_range(min=0, max=128),
@@ -484,10 +532,14 @@ STATE_NUM_SCHEMA = cv.Schema({
     cv.Optional(CONF_SIGNED, default=True): cv.boolean,
     cv.Optional(CONF_ENDIAN, default="big"): validate_endian,
     cv.Optional(CONF_DECODE, default="none"): validate_decode,
+    cv.Optional(CONF_MASK, default=[]): validate_hex_data,
 })
 
 def state_num_schema(value):
-    return STATE_NUM_SCHEMA(value)
+    value = STATE_NUM_SCHEMA(value)
+    if len(value[CONF_MASK]) > value[CONF_LENGTH]:
+        raise cv.Invalid("Numeric mask cannot be longer than length")
+    return value
 
 HEX_SCHEMA_REGISTRY = SimpleRegistry()
 
@@ -552,7 +604,7 @@ def state_num_hex_expression(conf):
     signed = conf[CONF_SIGNED]
     endian = conf[CONF_ENDIAN]
     decode = conf[CONF_DECODE]
-    return state_num_t(offset, length, precision, signed, endian, decode)
+    return state_num_t(offset, length, precision, signed, endian, decode, conf[CONF_MASK])
 
 async def state_num_expression(conf):
     if cg.is_template(conf):
@@ -570,7 +622,8 @@ def command_hex_expression(conf):
     data = conf[CONF_DATA]
     ack = conf[CONF_ACK]
     mask = conf[CONF_MASK]
-    return cmd_t(data, ack, mask)
+    offsets = conf.get(CONF_PRESERVE_STATE, [])
+    return cmd_t(data, ack, mask, offsets)
 
 async def command_expression(conf):
     if cg.is_template(conf):

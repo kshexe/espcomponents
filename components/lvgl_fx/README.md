@@ -16,7 +16,7 @@ There are two kinds of motion, like `transition` and `animation` in CSS:
 | | **Transition** | **Effect** |
 | --- | --- | --- |
 | Meaning | a property goes to a new value and stays | a short movement that returns to where it was |
-| Examples | show/hide, opacity, gauge value, text, color, x/y, rotation | pulse, shake, nudge, flash, glow, blink |
+| Examples | show/hide, opacity, gauge value, text, color, x/y, rotation, drawing a line | pulse, shake, nudge, flash, glow, blink |
 | Call | `lvgl_fx.set` with the new **value** | `lvgl_fx.play` with the effect **name** |
 | Defined in | `transitions:` | `effects:` (a list of `tracks`) |
 | Repeats | no | once, N times, or `infinite` (a loop, until `stop`) |
@@ -33,7 +33,7 @@ external_components:
 ```
 
 `lvgl_fx` needs the `lvgl:` component. It allocates a fixed pool of `max_targets` x 68 bytes at setup.
-Cross-widget tween completions also allocate a temporary record; nothing is allocated per frame. Until the next release tag contains this component (`@latest` follows the
+Cross-widget completions (`fx::tween`, and the `completion_*` fields of `fx::Opt`) also allocate a temporary record while they run; line draw uses a static pool (see [Line draw](#line-draw)). Nothing is allocated per frame. Until the next release tag contains this component (`@latest` follows the
 release tag), use `@master` instead of `@latest`.
 
 ## Quick start
@@ -77,6 +77,10 @@ lvgl_fx:
     intensity: 1.0              # 0 - 4: scales the size of effects (distance, scale, strength), not transitions
   max_targets: 32               # 1 - 255: widgets that can be animated at once (see Caveats)
   slots_in_psram: false         # keep the per-widget state in PSRAM when available
+  max_text_runs: 4              # 1 - 32: labels that can type / decode at once (typewriter, decode)
+  max_text_length: 128          # 16 - 400: bytes (incl. the NUL) of the longest text they animate
+  max_line_runs: 4              # 1 - 32: lines that can be partially drawn at once (draw)
+  max_line_points: 16           # 2 - 64: points of the longest line that can be partially drawn
   suppress_when: !lambda return id(popup_open);   # bool; no captures (ids of globals, sensors ... work)
 
   transitions:
@@ -88,6 +92,7 @@ lvgl_fx:
       color:    { duration: normal }
       position: { duration: normal, curve: ease_out }   # x and y
       rotation: { duration: normal, curve: ease_out }
+      draw:     { duration: normal, curve: linear }     # an lv_line, drawn along its points
     custom:                     # named transitions: list only what differs from the defaults
       - id: gauge_slow
         value: { duration: slow }
@@ -100,6 +105,20 @@ lvgl_fx:
         text: { style: roll, distance: 14, duration: 140ms }
       - id: odometer
         text: { style: count, format: "%.0f km", duration: 800ms }
+      - id: terminal_line
+        text: { style: typewriter, char_time: 25ms, jitter: true }   # 25 ms per character, whatever the length
+      - id: title_decode
+        text: { style: decode, char_time: 60ms, noise_period: 50ms }
+      - id: trace_in
+        draw: { duration: 200ms }
+      - id: trace_out
+        draw: { duration: 120ms }
+      - id: card_logged
+        visible: { show: slide_up, hide: fade }
+        on_start:               # once per `set` that animates; `x` is the widget (lv_obj_t *)
+          - logger.log: { format: "card moving on %p", args: [ x ] }
+        on_end:                 # when `then` would play (also when applied at once); `x` is the widget
+          - logger.log: { format: "card done on %p", args: [ x ] }
 
   presets:                      # magnitudes of the built-in effects
     pulse: { scale: 112% }
@@ -111,6 +130,7 @@ lvgl_fx:
     when_suppressed: skip
     policy: normal
     defer_timeout: 3s
+    cooldown_scope: effect
 
   effects:
     - id: prnd_confirm
@@ -118,6 +138,11 @@ lvgl_fx:
         - flash: { property: bg_color, color: white, duration: 340ms, curve: ease_in }
     - id: heat
       cooldown: 2500ms
+      cooldown_scope: widget    # counts from any one-shot effect on the widget, not only `heat`
+      on_start:                 # once per play, when the motion starts; `x` is the widget (lv_obj_t *)
+        - script.execute: log_heat
+      on_end:                   # once, after the last repeat, just before `then`
+        - script.execute: heat_done
       tracks:
         - nudge: { y: -2, duration: 220ms }
         - flash: { property: image_recolor, amount: 25%, duration: 220ms }
@@ -128,14 +153,18 @@ lvgl_fx:
         - blink: { opacity: 35%, duration: slow }
 ```
 
-### `motion`, `max_targets`, `slots_in_psram`, `suppress_when`
+### `motion`, `max_targets`, `slots_in_psram`, `max_text_runs`, `max_text_length`, `max_line_runs`, `max_line_points`, `suppress_when`
 
 | Option | Default | |
 | --- | --- | --- |
 | `motion.fast` / `normal` / `slow` | 120 ms / 200 ms / 320 ms | The duration tokens (they also follow `fx::motion()` at run time). |
 | `motion.intensity` | 1.0 | Multiplies effect sizes (nudge/shake distance, pulse growth, flash/glow strength, blink depth). |
-| `max_targets` | 32 | Size of the slot pool, 68 bytes per slot (measured, 32-bit target). |
+| `max_targets` | 32 | Size of the slot pool, 68 bytes per slot (measured, 32-bit target; unchanged by `cooldown_scope`, `on_start` and `on_end`, which live in the const tables). |
 | `slots_in_psram` | false | Try PSRAM first and fall back to internal RAM. Accesses per frame are few. |
+| `max_text_runs` | 4 | 1 - 32. Labels that can run `typewriter` / `decode` at the same time (a static pool, not per widget). Each run costs `max_text_length` + 28 bytes of RAM (156 bytes by default). |
+| `max_text_length` | 128 | 16 - 400. Size of one text run in bytes including the terminating NUL, i.e. the longest text (127 bytes, not characters) that is typed or decoded; longer texts are applied at once. Also 128 bytes of shared scratch. |
+| `max_line_runs` | 4 | 1 - 32. Lines that can be *partially drawn* (animating, or resting between 0 and 100 %) at the same time: a static pool, not per widget. A run costs 16 + 8 x `max_line_points` bytes (144 by default). Lines at 0 % or 100 % use no run. |
+| `max_line_points` | 16 | 2 - 64. Points of the longest line that can be partially drawn. A longer line, or a line that finds the pool busy, is drawn in whole segments at once (logged once, see [Line draw](#line-draw)). |
 | `suppress_when` | none | Lambda returning `bool`. While true, transitions apply instantly and effects follow `when_suppressed`. |
 
 ### Transitions
@@ -149,10 +178,11 @@ value, so a named transition lists only what differs.
 | `visible` | show/hide | `style` (`fade`), `show` / `hide`, `from` (90%, 1 - 200%), `distance` (12 px, 0 - 1000), `duration` (`normal`), `curve` (`ease_out`), `delay` (0) |
 | `opacity` | opacity | `duration` (`normal`), `curve` (`linear`), `delay` |
 | `value` | bar / arc / slider value, image rotation, label number | `duration` (`normal`), `curve` (`ease_out`), `delay` |
-| `text` | label text | `style` (`fade`), `from` (85%, 0 - 100%), `distance` (14 px, 0 - 1000), `format` (`%.0f`), `duration` (`fast`), `curve` (`linear`), `delay` |
+| `text` | label text | `style` (`fade`), `from` (85%, 0 - 100%), `distance` (14 px, 0 - 1000), `format` (`%.0f`), `char_time` (none, 1 ms - 5 s), `jitter` (`false`), `noise` (`#%&*+<>/=0123456789`), `noise_period` (50 ms, 10 ms - 1 s), `duration` (`fast`), `curve` (`linear`), `delay` |
 | `color` | label text color, image recolor, other widgets' background | `duration` (`normal`), `curve` (`linear`), `delay` |
 | `position` | `x` and `y` | `duration` (`normal`), `curve` (`ease_out`), `delay` |
 | `rotation` | transform rotation | `duration` (`normal`), `curve` (`ease_out`), `delay` |
+| `draw` | how much of an `lv_line` is drawn | `duration` (`normal`), `curve` (`linear`), `delay` |
 
 `duration: 0ms` applies instantly.
 
@@ -176,7 +206,42 @@ the style it started with.
 | `fade` | the new text starts at `from` opacity and rises to 100% |
 | `roll` | like `fade`, and the new text moves in `distance` px: from below when the leading number grows, from above when it shrinks. If either text does not start with a number it behaves like `fade` |
 | `count` | `set_value` on a label counts from the number on screen to the new one. The label's text must start with the literal text of `format` before its `%`, then a number, otherwise the new text fades in (see Caveats for the limits) |
+| `typewriter` | the label is typed out: it shows the first characters of the new text, one more at a time, and ends on the exact text. The label text is the partial text while it types (a cursor is up to the app) |
+| `decode` | every character that is not locked yet shows changing noise symbols; the characters lock to the real one from left to right. The label text is the scrambled text while it runs |
 | `none` | instant |
+
+**`typewriter` and `decode` in detail.** `duration` is the time of the whole transition, as for every style. For these two
+styles the time can instead be given per character with `char_time`, so a longer text takes longer and the pace stays
+the same: the duration is `characters x char_time` (at most 60 s). A character is a Unicode code point, never a byte.
+`char_time` and `duration` both time the whole transition, so they cannot be given together in one entry (rejected at
+configuration time). In a named transition on top of `defaults:` the most specific entry that gives either one wins
+(a named `duration` beats the defaults' `char_time` and the other way round); built from C++, `char_time` wins over a
+`duration` of the same entry. `delay` and `curve` work as for the other styles: during `delay` the label keeps its old
+text, `curve` shapes the speed of the reveal (`linear` types at an even pace).
+
+| Field | Style | Meaning |
+| --- | --- | --- |
+| `char_time` | both | time per character (1 ms - 5 s) instead of `duration` |
+| `jitter` | `typewriter` | `true`: uneven, human-like timing, `false` (default): the same time per character. The total time stays what `duration` or `char_time` says; a space is quicker than other characters and the rhythm is a fixed function of the character and its position, so the same text always types the same way |
+| `noise` | `decode` | the symbols that unlocked positions cycle through, default `#%&*+<>/=0123456789`. Non-empty printable ASCII, at most 32 characters |
+| `noise_period` | `decode` | time between two noise changes, default 50 ms (10 ms - 1 s). The noise refreshes on its own clock, independent of `duration` and `curve`; the lock-in follows `curve` |
+
+Behavior of both styles:
+
+- The label shows intermediate text while the animation runs, and ends on the exact final text. `stop`, `instant: true`
+  and the policy (`suppress_when`, hidden widget, before `start`, reduced motion ...) give the final text at once.
+- A new `set` text during the animation **retargets**: the new text starts from scratch (the label restarts from an
+  empty text for `typewriter`, from all noise for `decode`). Setting the text the animation is already heading for does
+  nothing (it keeps running); setting the text that is on screen right now ends the animation there. An empty text is
+  applied at once.
+- `decode` only scrambles printable ASCII characters other than space. Spaces, control characters and multi-byte
+  characters are shown as they are and are never replaced by noise. The lock-in goes left to right, one code point at a
+  time, with equal steps.
+- `typewriter` reveals whole code points: it never cuts inside a multi-byte UTF-8 sequence.
+- They take no opacity or translate offsets (no layer cost). `on_start` and `then` work as for the other text styles;
+  `from`, `distance` are ignored. On other properties `typewriter` and `decode` do not exist (rejected in YAML; from C++
+  they behave as `fade` on `visible`).
+- `set_value` on a label formats the number and then types it like any text.
 
 `format` is a `printf` format with exactly one floating conversion (`%f`, `%.1f`, `%5.2f`, flags allowed, width at most
 40, precision at most 6) and optional `%%` for a literal `%`. Anything else (`%d`, `%s`, `*`, two conversions, none) is
@@ -226,13 +291,99 @@ Options of an effect (an effect's own value beats `effect_defaults`):
 | `retrigger` | `restart` / `ignore` | `play` while the same effect runs: start over / do nothing |
 | `when_suppressed` | `skip` / `defer` | `play` during `suppress_when`: drop it / keep one (a later one replaces it) and play it when suppression ends |
 | `defer_timeout` | time (3s) | how long a deferred effect stays valid |
-| `cooldown` | time (0) | minimum time between two plays of this effect on a widget (see Caveats) |
+| `cooldown` | time (0) | minimum time between two plays on a widget (see `cooldown_scope` and Caveats) |
+| `cooldown_scope` | `effect` / `widget` (`effect`) | what a `cooldown` counts from: the last start of the *same effect* on the widget / the last start of *any* one-shot effect on the widget |
 | `policy` | `normal` / `always` | `always` ignores `suppress_when` |
 | `then` | effect | played on the same widget when this effect has ended (all repeats). Not for loops |
+| `on_start` | automation | runs when a play of this effect starts moving (see [`on_start`](#on_start)). Effects of your own only; not for loops. Not available in `effect_defaults` |
+| `on_end` | automation | runs when a one-shot has ended naturally after all its repeats, at the moment its `then` would play and before it (see [`on_end`](#on_end)). Effects of your own only; not for loops. Not available in `effect_defaults` |
 
 A widget runs at most one one-shot effect and one loop at a time. Playing a second one-shot ends the first (at rest) and
 starts the new one; playing a different loop replaces the loop. `cooldown`, `defer_timeout` and `then` do not apply to
 loops. Playing a loop that is already on does nothing, so it is safe to repeat the call.
+
+### `on_start`
+
+An `on_start:` automation can be given to an effect (`effects:`) and to a named transition (`transitions: custom:`).
+The trigger argument is the target widget, an `lv_obj_t *` named **`x`** in lambdas (like `x` in `on_value`):
+
+```yaml
+lvgl_fx:
+  effects:
+    - id: heat
+      tracks:
+        - nudge: { y: -2, duration: 220ms }
+      on_start:
+        - logger.log: { format: "heat started on %p", args: [ x ] }
+        - script.execute: count_alert        # or: - lambda: fx::play(x, fx::BLINK);
+  transitions:
+    custom:
+      - id: card
+        visible: { show: slide_up, hide: fade }
+        on_start:
+          - lambda: ESP_LOGD("app", "card %s", lv_obj_is_hidden(x) ? "is hidden" : "is shown");
+```
+
+Exactly when it runs:
+
+- **Effect.** Once per play, at the moment the motion starts: after the effect's state is set up, before the first frame.
+  Not when the play is dropped (policy), in cooldown, ignored by `retrigger: ignore`, or finds no free slot (see
+  `PlayResult` below), and not once per `repeat`. A play kept by `when_suppressed: defer` runs it when it really plays
+  later. An effect played through `then` runs its own `on_start` like any other play. `retrigger: restart` (the default)
+  starts over, so it runs again.
+- **Transition.** Once per `set` call that really animates: not when the change is applied instantly (policy, `duration:
+  0`, `style: none`, `instant: true`, the pool is full), nor when the call changes nothing because the property is already
+  at (or on its way to) the value. It runs when the animation is started, so a `delay` is still ahead of it. For
+  `visible` it runs for showing and for hiding. A `then` effect plays when the transition ends, with its own `on_start`.
+- It runs after the runner's bookkeeping is done, so the automation may call `lvgl_fx.play`, `lvgl_fx.stop` or `lvgl_fx.set`
+  on the same widget. Keep it short: it runs inside the call that started the motion, on the main loop.
+- Do not play the *same* effect from its own `on_start`: with `retrigger: restart` that starts it again, runs the hook
+  again, and recurses without bound. The same goes for a transition whose `on_start` sets the same property with that
+  same transition.
+- `on_start` on a loop (`repeat: infinite`) is rejected at configuration time (hooks on loops are not supported yet).
+
+### `on_end`
+
+`on_end:` takes the same schema as `on_start:` (a list of automations; `x` is the target `lv_obj_t *`) and can be given to
+an effect and to a named transition. It runs **at exactly the moments the `then` would be played, and before it**, so
+"the thing is over" has one hook that policy cannot drop (a `then` *effect* is judged by effect policy and may be dropped;
+`on_end` is not an effect, so it always runs):
+
+```yaml
+lvgl_fx:
+  transitions:
+    custom:
+      - id: erase
+        draw: { duration: 200ms }
+        on_end:
+          - lambda: lv_obj_set_hidden(x, true);
+```
+
+| | `on_start` | `on_end` | `then` |
+| --- | --- | --- | --- |
+| The change **animates**, then completes | at the start | at completion | at completion (after `on_end`) |
+| Applied **at once by policy** (reduced motion, disabled, before start, hidden ancestor, `suppress_when`), `duration: 0`, `style: none`, a full slot / run pool, or LVGL could not allocate the animation | no | **yes** | yes (its own effect policy applies) |
+| `instant: true` | no | no | no |
+| **No-op** set (already at, or already moving to, the value) | no | no | no |
+| `stop()` | no | no | no |
+| **Superseded** by another set on the same property (the old animation is replaced) | no (the new one runs its own) | no (the new set runs its own) | no |
+| The app **takes the line over** (`draw`, `lv_line_set_points`) | no | no | no |
+| Effect ends after all `repeat`s | at the play's start | **yes** | yes |
+| Effect `stop()`, replaced by another one-shot, widget deleted | no | no | no |
+
+- **Transition.** The hook and `then` go through one shared function, so they cannot diverge: whenever a transition
+  completes, `on_end` runs first and then `then` is played, and a `completion_effect` of the call (see the C++ API) after
+  both. For `visible` it runs after a hide has hidden the widget and after a show. A change that has nothing to
+  move (the property already has the value) is a no-op and fires nothing. A `set_draw` that cannot be applied at all (no
+  slot, logged) fires nothing either.
+- **Effect.** After the last repeat, once the instance has ended (its offsets are gone). A deferred effect fires it when it
+  finally plays and ends. A loop never ends, so `on_end` on `repeat: infinite` is rejected at configuration time.
+- It runs after the runner's bookkeeping is done, so the automation may call `lvgl_fx.play`, `lvgl_fx.stop` or `lvgl_fx.set`
+  on the same widget.
+- Recursion caveat (as for `on_start`): a `set` inside `on_end` that ends *instantly* on the *same* transition runs that
+  transition's `on_end` again, and recurses without bound; use `instant: true` there (it fires nothing) or another
+  transition. Do not play the same effect from its own `on_end` with a `then` back to it either.
+- `on_end` alone does not make a transition valid: "a transition that sets nothing" still needs a property or `then`.
 
 ### Checked at configuration time
 
@@ -240,12 +391,20 @@ Besides out-of-range values, these are errors:
 - `then` on a loop, `then` pointing at a loop (from an effect or a transition), a `then` cycle;
 - an unknown effect or transition id; an effect id equal to a built-in effect name; the id `fx` for the component, an
   effect or a transition;
-- a transition that sets nothing (give it a property or `then`); a preset that sets nothing; a `nudge` without `x` and `y`;
+- `on_start` / `on_end` on a loop (`repeat: infinite`); `on_start` / `on_end` in `effect_defaults` or a preset; a `cooldown_scope` other than
+  `effect` / `widget`;
+- a transition that sets nothing (give it a property or `then`; `on_start` / `on_end` alone do not count); a preset that sets nothing; a `nudge` without `x` and `y`;
   `cycles: 0`;
 - `show` without `hide`; `style` together with `show` / `hide`; a `style` that does not fit the property (`slide_up`
   for text, `count` for visible, any `style` on `value`);
 - a `format` that is not a single `%f` (with flags, width, precision at most 6, and `%%`);
+- `typewriter` / `decode` on a property other than `text`; `char_time` together with `duration` in one entry, or with a
+  style other than `typewriter` / `decode`; `jitter` on any style but `typewriter`; `noise` / `noise_period` on any style
+  but `decode`; an empty `noise`, one with more than 32 characters or one with anything but printable ASCII;
+  `char_time` outside 1 ms - 5 s, `noise_period` outside 10 ms - 1 s;
 - `repeat: infinite` in `effect_defaults`; an effect longer than 65535 ms;
+- `draw` outside 0% - 100%, written as a bare number (`50`, `0.5`; write `50%`) or on a widget that is not a `line` (also in a
+  binding); `max_line_runs` outside 1 - 32, `max_line_points` outside 2 - 64; a `style`, `format` ... on `draw`;
 - `lvgl_fx.set` with no or several properties, `lvgl_fx.play` without `effect`.
 
 ## Actions
@@ -264,6 +423,7 @@ Exactly one property per action, plus the optional `transition` (the id of a nam
 | `value` | number | bar, arc, slider (clamped to the range); image: rotation in degrees (the short way round); label: the number, through `format` / `count` |
 | `text` | string, or `format` + `args` | label |
 | `color` | name, `0xRRGGBB`, `color:` id | label: text color; image: recolor; others: background |
+| `draw` | percentage `0%` - `100%` (float allowed: `33.3%`), or a lambda returning 0 - 100 | line (see [Line draw](#line-draw)) |
 | `x`, `y` | integer pixels | any. If the widget's current `x`/`y` is a percentage (or C++ passes `lv_pct()`), the change is instant: percentages cannot be interpolated |
 | `rotation` | degrees | any (transform rotation; set `transform_pivot_x/y` yourself) |
 
@@ -276,6 +436,8 @@ Exactly one property per action, plus the optional `transition` (the id of a nam
 - lvgl_fx.set: { id: bar_fuel, value: 0, instant: true }              # cancel the value glide and apply now
 - lvgl_fx.set: { id: splash, visible: false, force: true }             # even before lvgl_fx.start
 - lvgl_fx.set: { id: img_needle, value: 90 }                           # an image rotates
+- lvgl_fx.set: { id: route, draw: 100%, transition: trace_in }          # a line is drawn along its points
+- lvgl_fx.set: { id: route, draw: 0%, transition: trace_out }           # ... and erased again
 - lvgl_fx.set: { id: box, color: 0xC62828 }
 ```
 
@@ -349,12 +511,14 @@ fx::set_color(id(lbl_speed), lv_color_hex(0xFF0000));
 fx::set_x(id(box), 170);
 fx::set_y(id(box), 20);
 fx::set_rotation(id(box), 90.0f);
+fx::set_draw(id(route), 100.0f);                       // percent of the line's path length (an lv_line)
 
 fx::play(id(lbl_prnd), fx::PULSE);                     // fx::SHAKE, NUDGE_UP/DOWN/LEFT/RIGHT, FLASH, GLOW, BLINK
 fx::play(id(icon), id(heat));                          // an effect of your configuration
 fx::stop(id(icon));                                    // everything
 fx::stop(id(icon), id(warning_blink));                 // one effect
 fx::start();
+bool ready = fx::is_ready();                           // true once start() (or `lvgl_fx.start`) has run
 ```
 
 The first argument is an `lv_obj_t *` or an ESPHome LVGL widget. Every `set_*` and `play` takes a last `fx::Opt` (including `instant` for setters):
@@ -372,6 +536,52 @@ fx::set_value(id(bar_fuel), x, fx::Opt{id(gauge_slow)});                 // name
 fx::set_x(id(box), 170, {.transition = id(prnd_move), .force = true});
 fx::play(id(icon), fx::PULSE, {.force = true});
 ```
+
+**Completion on another widget.** `fx::Opt` has the two fields of `fx::TweenOpt`, `completion_effect` and `completion_target`,
+for **every** `set_*` (not for `play`, which has no transition). When the transition really completes, the effect
+plays on the target with the default policy, after the transition's own `then` (which plays on the widget itself):
+
+```cpp
+// the route is drawn; when the last point is reached the end marker pulses
+fx::set_draw(id(route), 100.0f, {.transition = id(trace_in), .completion_effect = fx::PULSE,
+                                 .completion_target = id(end_marker)});
+fx::set_value(id(bar_fuel), 20.0f, {.completion_effect = id(heat), .completion_target = id(icon)});
+```
+
+| What happens to the transition | Completion effect |
+| --- | --- |
+| it ends by itself (the animation reaches its end) | **plays** |
+| applied instantly: policy (disabled, hidden, before `start`, `suppress_when`), `duration: 0`, `instant: true`, no free slot or run | does not play (unlike `then`, which plays after an instant application: nothing *moved* here, so nothing completed) |
+| `stop()`, replaced by another `set` of the same property, cancelled | does not play |
+| the call changed nothing (already at that value) | nothing is armed; a running transition keeps the completion it started with |
+| the target widget is deleted | disarmed (no crash, no effect); the transition itself goes on |
+| the source widget is deleted | gone with it |
+
+Both fields must be set; one alone is ignored. The effect is played with the default policy (not `force`, not the
+call's transition), so it can be dropped like any `play`. Each call that sets both allocates one small record (a few
+words) for as long as the transition runs and registers a delete hook on the target; if that fails the transition
+runs without the follow-up effect. `fx::cancel_tween_effect(target)` also disarms the pending `Opt` completions that
+target a widget. C++ only: in YAML use `then:` (same widget) or `on_start:`.
+
+**`play` tells what happened.** It returns an `fx::PlayResult`; ignoring it is fine (the YAML action does):
+
+```cpp
+fx::PlayResult r = fx::play(id(icon), id(heat));
+if (r == fx::PlayResult::DROPPED) ESP_LOGD("app", "no motion: the screen is not ready or is hidden");
+```
+
+| Value | Meaning |
+| --- | --- |
+| `STARTED` | the effect is moving now (one-shot started, or loop switched on and moving) |
+| `DEFERRED` | `suppress_when` is true and the effect has `when_suppressed: defer`: it is kept and plays later |
+| `REMEMBERED` | a loop is now on but at rest because policy forbids motion for the moment (disabled, reduced motion, before `start`, hidden, suppressed); it starts by itself |
+| `IGNORED` | already running: `retrigger: ignore` on a one-shot that is running, or the same loop is already on |
+| `DROPPED` | policy dropped a one-shot: disabled, reduced motion, before `start`, hidden widget or ancestor, `suppress_when` with `skip` |
+| `COOLDOWN` | the `cooldown` is not over |
+| `NO_SLOT` | the slot pool is full (`max_targets`), or LVGL could not allocate the animation |
+| `INVALID` | no widget or effect given, or an effect without any motion (no track has a duration) |
+
+`force` skips `DROPPED`, `DEFERRED` and `COOLDOWN`. `fx::is_ready()` tells whether `start()` has been called.
 
 `id(heat)` / `id(gauge_slow)` are the ids of your `effects:` / `transitions: custom:` entries (a mistyped id is a compile
 error).
@@ -403,8 +613,136 @@ Starting a tween on the same `(var, setter)` replaces the running one; it starts
 outlive the tween. `fx::cancel_tween(var, setter)` stops it without applying the end value.
 
 Effects and transitions can also be written as `static const` tables (`fx::EffectDef`, `fx::Track`,
-`fx::TransitionDef`, `fx::PropTransition`) in a lambda; fields you leave out take the defaults. See
+`fx::TransitionDef`, `fx::PropTransition`) in a lambda; fields you leave out take the defaults. `cooldown_scope` and
+`on_start` / `on_end` are fields of `fx::EffectDef` and of `fx::TransitionDef` (`on_end` is the last field of both,
+after `on_start`): a plain function pointer `void (*)(lv_obj_t *)`, so a captureless lambda fits. See
 `tests/components/lvgl_fx/test.esp32-idf.yaml` for the full form.
+
+## Line draw
+
+`draw` progressively draws or erases an `lv_line` along its points, by **path length**: `0%` draws nothing, `100%` is the
+whole polyline, `50%` is half of the total length (the last visible segment is cut part-way). It is a transition like any
+other, with its own entry in `transitions:` (`duration`, `delay`, `curve`; `linear` by default so the tip moves at an even
+speed), named transitions, bindings, `instant`, `force`, `on_start`, `on_end`, `then` and the policy table.
+
+```yaml
+lvgl_fx:
+  transitions:
+    defaults:
+      draw: { duration: 200ms }
+    custom:
+      - id: trace_in
+        draw: { duration: 200ms, curve: linear }
+      - id: trace_out
+        draw: { duration: 120ms }
+    bindings:
+      - { id: route, draw: trace_in }          # `lvgl_fx.set draw` and fx::set_draw on `route` use trace_in by default
+
+lvgl:
+  pages:
+    - widgets:
+        - line:
+            id: route
+            points: [ { x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 80, y: 30 } ]
+# ...
+- lvgl_fx.set: { id: route, draw: 100% }                                   # drawn in
+- lvgl_fx.set: { id: route, draw: 0%, transition: trace_out }              # erased
+- lvgl_fx.set: { id: route, draw: !lambda "return x;" }                    # any 0 - 100 number
+```
+
+```cpp
+fx::set_draw(id(route), 62.5f);                                            // lv_obj_t * or an ESPHome line widget
+fx::set_draw(id(route), 100.0f, {.transition = id(trace_in), .completion_effect = fx::PULSE,
+                                 .completion_target = id(end_marker)});    // pulse another widget when it is drawn
+```
+
+**What it does, exactly.**
+
+- **Final state.** The state after a `set draw` is exact and independent of the motion: at `100%` the line shows its own
+  full points array again (the array the app gave LVGL, untouched), at `0%` it shows nothing, in between it shows the polyline up to that
+  length. `stop()` jumps to the target percent. A tiny percentage shows a tiny segment (with `line_rounded` a dot).
+- **Independent of `visible`.** Erasing to `0%` does not hide the line, and showing a hidden line does not draw it. The
+  line is merely invisible at 0 %; the app decides about `hidden`, see the recipe below. `draw` on a hidden line is
+  applied instantly (policy row 3), so set `visible` first.
+- **Not a line.** `fx::set_draw` on any other widget logs once and does nothing (YAML rejects it at configuration time).
+- **NaN / non-finite.** Instantly 0 (erased), like `value` goes to its minimum. Values outside 0 - 100 are clamped.
+- **Same value.** Setting the percentage the line has (or is heading for) does nothing; a running draw keeps going.
+  A new target while drawing continues from the percentage on screen. `instant` cancels the motion and applies the value.
+- **Fewer than 2 points** (or more than 255): logged once, nothing to draw, nothing changes.
+
+**The full points.** fx never owns the line's points. The first time a line is drawn it reads them back with
+`lv_line_get_points` / `lv_line_get_point_count` and keeps only the pointer. LVGL's own rule applies: **the array must
+outlive the line** (a `static` array, or the widget's own storage). If the app later calls `lv_line_set_points` with a
+different array - also while the line is erased, partially drawn or animating - fx notices (the line's points pointer is neither fx's
+partial buffer nor the array it captured), drops its state, ends a running draw without a completion, and
+captures the new array as the full line (100%). A new array at the same address *and* with the same point count as
+the old one cannot be told apart; the percentage fx remembers then still applies.
+
+**YAML `line` widgets.** ESPHome's `line` keeps its points in a `FixedVector` inside the widget (`LvLineType::points_`) and
+passes its storage to `lv_line_set_points`, so `lv_line_get_points` returns that storage and it lives as long as the
+widget: nothing needs to be done. `lvgl.line.update: { id: route, points: [...] }` replaces the vector and calls
+`lv_line_set_points` with the new storage, which is the re-capture case above. Point coordinates written as percentages
+(`x: 50%`) are measured against the line's size when it is drawn.
+
+**The partial array.** LVGL draws exactly the array it is given, so a partly drawn line is a partial array, in a static
+pool like the text runs of `typewriter`/`decode`: `max_line_runs` records of `max_line_points` points (BSS, no heap).
+
+| State of the line | Points LVGL has | Costs |
+| --- | --- | --- |
+| `100%` (at rest) | the app's full array | nothing: not tracked |
+| animating, or resting at `0% < p < 100%` | fx's buffer in a run (the run stays bound to the line) | one run |
+| `0%` (at rest) | the full array with **one** point (LVGL draws nothing for fewer than 2) | no run; the full pointer and point count are kept in the slot |
+
+A run is free as soon as the line is no longer partially drawn: at exactly 100 % the line gets its full points back, at 0 %
+the run is released too, and deleting the line frees it, so erased and complete lines use no run. A line that is **erased
+or partly drawn needs a target slot** (`max_targets`, 68 bytes like every animated widget): a pool of slots in use makes the
+call do nothing, logged once.
+
+**When the pool cannot serve a line** (every run is busy, or the line has more than `max_line_points` points) the call
+still applies its final state at once, without motion, and logs once: `0%` and `100%` stay exact, anything in between shows
+the **whole segments** that fit into that length (no interpolated tip). Its `then` plays, its completion effect does not
+(nothing moved). Raise `max_line_runs` / `max_line_points` if this log appears.
+
+**Layout.** LVGL sizes a line with the default `width`/`height: size_content` from the points it is given, so a partly
+drawn line is smaller than the full one. Drawing itself is unaffected (it uses absolute coordinates), but if the line is
+aligned, centered or laid out in a container, give it a fixed `width` and `height` so that its place does not change
+while it is drawn.
+
+**Recipe: draw in on show, erase then hide.** `draw` and `visible` are separate, so chain them yourself. Drawing needs
+the line to be shown (a hidden widget applies instantly), and the line must start at 0 % to draw in:
+
+```yaml
+lvgl_fx:
+  transitions:
+    custom:
+      - id: trace_in
+        draw: { duration: 250ms }
+      - id: trace_out
+        draw: { duration: 120ms }
+        on_end:                      # runs when the erase is over
+          - lambda: lv_obj_set_hidden(x, true);
+
+script:
+  - id: show_route
+    then:
+      - lvgl_fx.set: { id: route, draw: 0%, instant: true }               # start empty (a hidden line: instantly)
+      - lvgl_fx.set: { id: route, visible: true, instant: true }
+      - lvgl_fx.set: { id: route, draw: 100%, transition: trace_in }      # the tip runs along the route
+  - id: hide_route
+    then:
+      - lvgl_fx.set: { id: route, draw: 0%, transition: trace_out }       # erased, then `on_end` hides it
+```
+
+The same from C++: `fx::set_draw(line, 0, {.instant = true}); fx::set_visible(line, true, {.instant = true});
+fx::set_draw(line, 100, {.transition = id(trace_in)});`.
+
+**Why this is exact.** `on_end` fires when the erase animation completes, and also when the erase is applied at once
+(motion disabled, before `lvgl_fx.start`, a hidden ancestor, `suppress_when`, `duration: 0`, a full run pool): the line is
+hidden exactly when the erase is over, in every case. It does not fire when the call changes nothing (the line is already
+empty), on `stop()`, with `instant: true`, when another `draw` call replaces the erase, or when the app takes the line
+over, so none of those hides a line that was not erased. A `then` effect cannot do this job: it is played with the normal
+effect policy and is dropped while motion is not allowed, so the line would stay visible. To pulse *another* widget when the
+route is complete, use `completion_effect` / `completion_target` (see the C++ API).
 
 ## Policy
 
@@ -416,7 +754,7 @@ Every transition and one-shot effect is judged once, when it starts. The first r
 | 2 | before `lvgl_fx.start` | applied instantly | dropped | remembered, starts at `start` |
 | 3 | the widget or an ancestor is hidden | applied instantly | dropped | rests; resumes when shown |
 | 4 | `suppress_when` is true (not for `policy: always`) | applied instantly | `when_suppressed`: dropped or deferred | rests; resumes when released |
-| 5 | `cooldown` not over | n/a | dropped | n/a |
+| 5 | `cooldown` not over (see `cooldown_scope`) | n/a | dropped | n/a |
 
 - `force: true` skips rows 1 - 5. A loop started with `force` is never paused by policy.
 - "Applied instantly" always lands on the exact final value, so nothing is lost; `set_visible` only looks at the
@@ -428,6 +766,8 @@ Every transition and one-shot effect is judged once, when it starts. The first r
 - A transition that is replaced by another on the same property continues from where it is.
 - Once fx has taken over opacity, scale, rotation, color or outline of a widget, change them through fx only. Value,
   text and x/y are read again on every call, so changing them elsewhere is fine.
+  A line's points are the exception to "read again": fx notices a new array given with `lv_line_set_points` and
+  captures it (see [Line draw](#line-draw)); leave a partly drawn line's array alone otherwise.
 
 ## Caveats
 
@@ -460,21 +800,39 @@ Every transition and one-shot effect is judged once, when it starts. The first r
   point, and the difference between start and end must be at most 2,097,150 fixed-point units (`%.0f`: 2,097,150;
   `%.2f`: 20,971.50). Otherwise the new text fades in (the final text is the same). A label with no readable number
   (empty, `--`, text) also fades instead of counting. Formatted label numbers are cut at 47 characters.
-- **`cooldown`** compares with the last one-shot effect on the same widget, and only when that was the same effect:
-  `heat`, `pulse`, `heat` plays `heat` again. It counts from the start of that play, and `force` ignores it.
+- **`cooldown`** counts from the start of the last one-shot effect on the same widget; `force` ignores it, loops are not
+  affected. With `cooldown_scope: effect` (the default) it only counts when that was the same effect: `heat`, `pulse`,
+  `heat` plays `heat` again. With `cooldown_scope: widget` any effect counts: `heat`, `pulse` (cooldown 2500 ms) is
+  dropped. The cooldown that applies is the one of the effect being played. A `then` follow-up is not subject to cooldown (it is part of the same play); the other policy rows still apply to it.
 - **`intensity`** is global and sampled when an effect starts: changing it applies at the next `play()` to all effects
   that are running as well.
 - **`then` is played with the default policy**, not with the `force` or transition of the call that triggered it.
 - **Ids named `fx`.** `fx` is the C++ alias of the namespace, so no id in the whole configuration may be `fx` (the
   component, effect and transition ids are rejected at validation; other platforms' ids would fail to compile).
-- **Not yet supported:** a `typewriter` text style, user-defined tracks, stagger over several widgets, binding a
+- **`typewriter` / `decode` limits.** The final text lives in a fixed record while the label shows something else, so
+  there is a small static pool: `max_text_runs` records (4) of `max_text_length` bytes (128: texts up to
+  127 bytes, not characters). At most that many labels can type or decode at once; a longer text, or a label that
+  finds the pool busy, gets the final text at once (logged once) and nothing else changes. Both are
+  YAML options (C++-only users can define `LVGL_FX_TEXT_RUNS` / `LVGL_FX_TEXT_RUN_BYTES`). Each visible change is one `lv_label_set_text`, so LVGL reallocates the label's own buffer
+  (as `count` does); the typewriter changes the text at most once per character and `decode` at most once per
+  `noise_period`. Anything that changes the label with `lv_label_set_text` while one of these runs is overwritten by the
+  next frame; use `lvgl_fx.set` (or `stop` first).
+- **`draw` limits.** One draw per line; the state lives in `Slot::style`, so `draw` on a line and the text styles never
+  meet (a line is not a label). Lines of 2 - 255 points; partial drawing needs a run (`max_line_runs` /
+  `max_line_points`), otherwise whole segments are shown. Points are read when the line is first drawn: change a
+  line's points through `lv_line_set_points` (fx re-captures) and never edit a captured array in place while the line is
+  partly drawn. `lv_line_set_points_mutable` arrays are restored as mutable at 100 %.
+- **Not yet supported:** user-defined tracks, stagger over several widgets, binding a
   transition to a widget instead of naming it per call.
 
 ## Footprint
 
 Definitions become `static const` tables in flash. RAM is the slot pool (`max_targets` x 68 bytes, 2.2 KB for the
-default 32) plus one LVGL animation per running transition or effect, regardless of the number of tracks. Nothing is
-allocated per frame. The compile test and the demo build on ESP32 with ESP-IDF.
+default 32) plus one LVGL animation per running transition or effect, regardless of the number of tracks. The
+`typewriter` / `decode` styles add a static pool of `max_text_runs` x (`max_text_length` + 28) bytes of text runs, 4 x 156 bytes by default, plus `max_text_length` bytes of scratch, which is not
+part of the slot (still 68 bytes). Line draw adds a static pool of `max_line_runs` x (16 + 8 x `max_line_points`) bytes (4 x 144
+by default, 576 bytes) and keeps its per-line state in the existing slot (`Slot::style`, which a line does not
+otherwise use): the slot stays 68 bytes. Nothing is allocated per frame. The compile test and the demo build on ESP32 with ESP-IDF.
 
 
 ### Additional tracks and completion hooks
@@ -495,7 +853,8 @@ play the completion effect. `fx::cancel_tween_effect(target)` disarms pending
 completions without stopping the source tween. The target is disarmed on deletion.
 Cross-widget completions allocate a small temporary record and register a deletion
 callback; if allocation fails the source tween and its callback still run, without
-the follow-up effect.
+the follow-up effect. The same two fields exist on `fx::Opt` for every `set_*`
+(see the C++ API).
 
 
 ### Widget transition bindings

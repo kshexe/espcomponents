@@ -57,11 +57,17 @@ enum class InstanceKind : uint8_t {
   TEXT_ENTER,  // text fade / roll: progress 0..255 = how far the new text has arrived; arg.a = signed travel in px
                // (0 = fade only), arg.b = starting opacity 0..255.  opa offset: arg.b -> 255, translate_y: arg.a -> 0
   COUNT,       // label count: moves no property (the lv_anim callback writes the text); format/state: see Instance
+  TYPEWRITER,  // label typewriter / decode: move no property either, the lv_anim callback writes the text from the
+  DECODE,      //   working record in `run` (styles.cpp)
   SLIDE_UP,    // visible styles: offsets derived from the slot's base opacity, which the visible transition
   SLIDE_DOWN,  //   animates.  state = the opacity the target has while shown (offset 0), arg.a = distance in px
   SLIDE_LEFT,  //   (zoom: the starting scale in Q8).  The offset is zero at that opacity and full at opacity 0.
   SLIDE_RIGHT,
   ZOOM,
+  LINE_RUN,    // lv_line draw (draw.cpp): Slot::style.run = the line run (partial point buffer) bound to the line while
+               //   it is animating or partially drawn at rest.  Moves no property.  (Appended: values stay stable)
+  LINE_REST,   // lv_line draw at rest without a run (0 %, or a degraded partial): def = the full points array,
+               //   state = its point count, progress = percent in 1/100 % (bits 0-13) | 0x8000 = the array was mutable
 };
 
 // One running piece of motion on a target.  An idle instance is all zero.  The first member is a union so that
@@ -73,6 +79,8 @@ struct Instance {
     struct {
       int16_t a, b;
     } arg;                          // style kinds: resolved parameters (see InstanceKind)
+    void *run;                      // TYPEWRITER / DECODE: the text run it plays (styles.cpp); LINE_RUN: the line run
+                                    // LINE_REST: the full points array (`def`)
   };
   uint16_t progress;                // kind-specific progress, written by the lv_anim callback
   InstanceKind kind;
@@ -109,7 +117,7 @@ struct Slot {
   uint8_t base_image_opa;         // image opacity without effect offsets
   uint8_t base_outline_opa;       // outline opacity the widget had when fx took it over (glow adds on top)
   Instance one_shot, loop;        // effects; one_shot keeps its last effect after it ended (cooldown)
-  Instance style;                 // text style entry (fade / roll / count)
+  Instance style;                 // text style entry (fade / roll / count); on an lv_line: the draw state (LINE_RUN / LINE_REST)
   Instance vis;                   // visible style entry/exit (slide / zoom), alive while a visible transition runs
   uint32_t last_play_tick;        // lv_tick of the last one-shot start (cooldown)
   const EffectDef *deferred;      // effect kept by `when_suppressed: defer` (one per target)

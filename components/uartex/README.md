@@ -4,7 +4,13 @@
 
 A custom ESPHome component that extends UART communication to easily integrate various serial protocols with Home Assistant.
 
-Related: [wallpad presets](../../packages/wallpad) · [TCP forwarding](../tcp_server).
+[한국어 README](README.ko.md) · [Packet configuration guide for agents](PACKET_GUIDE.md) · [Wallpad presets](../../packages/wallpad) · [TCP forwarding](../tcp_server).
+
+## Documentation baseline
+
+This README describes UARTEx at espcomponents commit `e3b1d72` (reviewed 2026-11-21). The Quick Start examples passed `esphome config` with ESPHome `2026.11.0` and the component from that commit. [UARTEx source at the documented revision](https://github.com/eigger/espcomponents/tree/e3b1d72680e30377b1ddc3c4fa3116beb0a968a0/components/uartex)
+
+The installation example tracks the moving `latest` tag. To reproduce the examples, replace `latest` in the source URL with the documented commit. For another revision, use its common and platform Python schemas for accepted YAML keys and defaults, and its C++ implementation for packet handling.
 
 ## Table of Contents
 
@@ -40,6 +46,8 @@ external_components:
 
 ## Quick Start
 
+Choose pins and baud rate for your board and device. This example protocol uses the same payloads for switch commands and state reports. UARTEx adds the configured framing when sending and removes it before matching a received payload.
+
 ```yaml
 uart:
   id: uart_bus
@@ -59,15 +67,26 @@ uartex:
 switch:
   - platform: uartex
     name: "My Switch"
-    state_on:
-      data: [0x01, 0x01]
-    state_off:
-      data: [0x01, 0x00]
-    command_on:
-      data: [0x01, 0x01]
-    command_off:
-      data: [0x01, 0x00]
+    state_on: [0x01, 0x01]
+    state_off: [0x01, 0x00]
+    command_on: [0x01, 0x01]
+    command_off: [0x01, 0x00]
 ```
+
+With these settings, the ON frame on the wire is `02 01 | 01 01 | 05 | 0D 0A` (header, payload, additive checksum, footer). The state pattern matches the start of the payload by default.
+
+For a device that reports a channel and a separate status byte, consider the frame `02 01 | 02 03 01 | 09 | 0D 0A`. Here the first two payload bytes identify the report and the third carries its state. The following entity uses the same bus settings:
+
+```yaml
+binary_sensor:
+  - platform: uartex
+    name: "Channel Status"
+    state: [0x02, 0x03]
+    state_on: {offset: 2, data: [0x01]}
+    state_off: {offset: 2, data: [0x00]}
+```
+
+Count `offset` from the first payload byte. Matching `state` leaves that origin in place. Use the mapping form when you need an offset, a mask, or an ACK pattern for a command.
 
 ---
 
@@ -82,7 +101,6 @@ uartex:
   tx_delay: 50ms
   tx_timeout: 500ms
   tx_retry_cnt: 3
-  tx_command_queue_size: 10
   rx_header: [0x02, 0x01]
   rx_footer: [0x0D, 0x0A]
   tx_header: [0x02, 0x01]
@@ -96,14 +114,14 @@ uartex:
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `rx_timeout` | time | `10ms` | Receive timeout (max: 2000ms) |
-| `rx_length` | int | - | Fixed packet length (1-256) |
+| `rx_length` | int or lambda | - | Total packet length (1-256) |
 | `rx_data_length` | schema | - | Dynamic length parsing (see below) |
-| `tx_delay` | time | `50ms` | Delay between transmissions (max: 2000ms) |
+| `tx_delay` | time | `50ms` | Minimum quiet time after the latest received byte or transmission (max: 2000ms) |
 | `tx_timeout` | time | `50ms` | ACK response timeout (max: 2000ms) |
-| `tx_retry_cnt` | int | `3` | Retry count on ACK failure (1-10) |
+| `tx_retry_cnt` | int | `3` | Number of retries after the initial transmission on ACK failure (1-10) |
 | `tx_command_queue_size` | int | `10` | Deprecated, no effect (accepted for compatibility) |
 | `tx_ctrl_pin` | pin | - | RS485 direction control pin |
-| `rx_header` | bytes | - | Receive packet header |
+| `rx_header` | bytes, header schema, or list of headers | - | Receive packet header candidates (see below) |
 | `rx_footer` | bytes | - | Receive packet footer |
 | `tx_header` | bytes | - | Transmit packet header |
 | `tx_footer` | bytes | - | Transmit packet footer |
@@ -116,6 +134,43 @@ uartex:
 > **Note**: 
 > - Use either `rx_length` or `rx_data_length`, not both.
 > - Use either `rx_checksum` or `rx_checksum2`, not both. Same applies to `tx_checksum` and `tx_checksum2`.
+
+ESPHome configuration validation warns about impossible masked header, entity
+state, and ACK values, and entity or `rx_reply` definitions that cannot fit the
+payload of a fixed-length receive frame. Numeric fields that would be truncated
+or missing also produce warnings. These warnings do not prevent configuration
+builds. Payload-size checks are skipped when the receive length is dynamic.
+Nested automation actions are not checked.
+
+#### Receive headers (`rx_header`)
+
+A single header can be a byte list, an ASCII string, or a mapping with `data`
+and an optional bit `mask`. To accept multiple headers, provide a list of
+candidates using the same forms:
+
+```yaml
+uartex:
+  rx_header:
+    - [0xA0, 0x01]
+    - data: [0xB0, 0x00]
+      mask: [0xF0, 0xFF]
+    - data: "RX" # ASCII header
+```
+
+A flat list is interpreted as a single byte list. For multiple ASCII headers,
+use `data` mappings so the list is unambiguously a list of candidates. All
+candidates share the configured frame length, footer, and checksum rules.
+For overlapping headers, see the priority rules below.
+
+Use an `rx_length` lambda for protocols where a header or opcode determines
+the total frame length. The lambda receives `data` and `len` for the bytes
+received so far, including the header. Return a positive total length to
+set the frame boundary, zero while waiting for more bytes, or a negative
+value to discard the current candidate.
+
+For device emulation, `write_immediate_reply(data)` sends a reply from an
+`on_read` lambda using the configured TX header, checksum, footer, and
+direction pin. The reply leaves any pending command and its ACK timer in place.
 
 #### `rx_priority`: `data` vs `loop`
 
@@ -170,7 +225,7 @@ uartex:
 **Packet Structure Example**:
 ```
 Packet: [Header:2][Length:1][Data:N][Checksum:1]
-        [0xAA][0xBB][0x03][0x11][0x22][0x33][0xCC]
+        [0xAA][0xBB][0x03][0x11][0x22][0x33][0xCE]
                      ↑
                      Length field = 3 (data bytes)
 
@@ -231,7 +286,32 @@ untagged commit (e.g. tracking the default branch between releases) shows
 the short commit hash, and a local checkout shows `git describe` output such
 as `v261119-3-gabc1234`. `unknown` means git was not available.
 
+When receive headers share a prefix, configured order determines priority.
+The parser considers the first complete matching header and may treat it as
+provisional while an earlier, longer header remains possible. That provisional
+header can complete a valid frame; otherwise the earlier header may take
+priority as more bytes arrive. Other complete candidates are not tested in
+parallel. If the same bytes form a valid shorter frame and the start of a
+longer frame, the shorter frame wins at its boundary. Prefer headers without
+prefix ambiguity. On a mismatch, the parser retains any suffix that can start
+a header. UARTEx requires at least one data byte in a received frame.
+
+`rx_reply` commands are queued ahead of ordinary commands and use the same
+`tx_delay` gap after the latest received byte or transmitted frame, including bytes from malformed or incomplete frames. A reply waits
+while a command is awaiting its acknowledgment. With `tx_delay: 0ms`, an
+eligible reply can be sent in the same loop as the received frame. Continuous
+receive traffic can delay replies until the bus has been quiet for `tx_delay`.
+The reply queue holds at most 10 waiting commands; when full, newly generated
+replies are dropped and the already queued replies keep their order.
+
 #### Event Triggers
+
+In `on_read` and `on_write`, `data` points to `len` bytes for that event.
+The bytes remain valid through the automation's delayed and repeated actions.
+If a lambda stores `data` for use after that automation finishes, it must copy
+the bytes into its own storage. Direct C++ callbacks registered with
+`add_on_read_callback` or `add_on_write_callback` may use the pointer only
+during the callback and must copy it to retain the data.
 
 ```yaml
 uartex:
@@ -276,7 +356,20 @@ state_number:
   signed: true       # Signed integer
   endian: big        # Byte order: big, little
   decode: none       # Decode: none, bcd, ascii
+  mask: [0x7F]       # Optional per-byte AND mask
 ```
+
+Mask bytes apply in received order starting at `offset`, before binary, BCD,
+or ASCII conversion. The mask may contain at most `length` bytes; omitted
+mask bytes default to `0xFF`. For signed binary, the masked most significant
+byte determines the sign, using the full configured byte width.
+
+Binary and BCD fields use all configured bytes (up to 16). Binary signed
+values use two's complement; BCD stops at the first byte with an invalid
+decimal nibble. Wide numeric fields are accumulated with double precision and
+returned as `float`, so large values are rounded and may become positive or
+negative infinity after scaling by precision. ASCII fields retain their
+string-to-number conversion behavior.
 
 #### Understanding Offset
 
@@ -328,6 +421,32 @@ command:
 
 **Shorthand**: `command_on: [0x01, 0x02, 0x01]`
 
+An entity command can preserve other lights' last received state when changing
+one light in a whole-room command. In this shortened example, bytes 1, 2 and 3
+represent three lights. The command turns on the first light and keeps the
+second and third at their last received values:
+
+```yaml
+state: [0x10]
+command_on:
+  data: [0x30, 0xff, 0x00, 0x00]
+  ack: [0x40]
+  preserve_state: [2, 3]
+```
+
+Each offset identifies one byte at the same position in the RX and TX payloads.
+Offsets are zero-based and exclude UART headers, checksums, and footers. They
+must be unique and fit the command data. The entity must have a `state` filter.
+A command waits until an accepted payload contains every preserved byte; other
+ready commands and update polls can still transmit. After such a command is
+sent, entities whose `state` filters match the source frame wait for another
+matching RX payload before sending their next state-preserving command. If no
+new state arrives those commands remain queued. Retries reuse the first
+transmitted bytes and require another matching state frame afterward.
+`preserve_state` is available on entity commands, except `command_update`; it
+is not available for `rx_reply` or `uartex.write`. Lambda commands retain their
+existing behavior.
+
 #### Command Lambda Types
 
 Commands support lambda expressions for dynamic data. The lambda signature varies by command type:
@@ -377,11 +496,11 @@ binary_sensor:
       data: [0x00]
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state` | No | Base state filter |
-| `state_on` | **Yes** | ON state match |
-| `state_off` | **Yes** | OFF state match |
+| `state_on` | No | ON state match |
+| `state_off` | No | OFF state match |
 | `command_update` | No | Status request command |
 
 ---
@@ -402,9 +521,9 @@ button:
       data: [0x02, 0x03, 0x01]
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
-| `command_on` | **Yes** | Press command |
+| `command_on` | No | Press command |
 
 ---
 
@@ -436,12 +555,12 @@ switch:
       ack: [0x01, 0x10]
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
-| `state_on` | **Yes** | ON state match |
-| `state_off` | **Yes** | OFF state match |
-| `command_on` | **Yes** | ON command |
-| `command_off` | **Yes** | OFF command |
+| `state_on` | No | ON state match |
+| `state_off` | No | OFF state match |
+| `command_on` | No | ON command |
+| `command_off` | No | OFF command |
 
 ---
 
@@ -453,7 +572,7 @@ RX ON:       [0x02][0x01][0x01][0x01][0x80][chk][0x0D][0x0A]
 RX OFF:      [0x02][0x01][0x01][0x00][0x00][chk][0x0D][0x0A]
              |--header--|------data--------|    |footer|
 Offset:                    0     1     2
-                                      └─ brightness (0x80 = 128)
+                                      └─ brightness (0x80 ≈ 50%)
 ```
 
 ```yaml
@@ -464,24 +583,23 @@ light:
       data: [0x01, 0x01]
     state_off:
       data: [0x01, 0x00]
-    state_brightness:
-      offset: 2
-      length: 1
+    state_brightness: !lambda |-
+      return len > 2 ? data[2] * 100.0f / 255.0f : NAN;
     command_on:
       data: [0x01, 0x01]
     command_off:
       data: [0x01, 0x00]
     command_brightness: !lambda |-
-      return {{0x01, 0x02, (uint8_t)(x * 255)}, {0x01, 0x12}};
+      return {{0x01, 0x02, (uint8_t) lroundf(x * 255.0f / 100.0f)}, {0x01, 0x12}};
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
-| `state_on` | **Yes** | ON state match |
-| `state_off` | **Yes** | OFF state match |
-| `state_brightness` | No | Brightness state (0-1.0) |
-| `command_on` | **Yes** | ON command |
-| `command_off` | **Yes** | OFF command |
+| `state_on` | No | ON state match |
+| `state_off` | No | OFF state match |
+| `state_brightness` | No | Brightness in percent (0–100) |
+| `command_on` | No | ON command |
+| `command_off` | No | OFF command |
 | `command_brightness` | No | Brightness command: `cmd_t lambda(float x)` |
 
 ---
@@ -508,11 +626,11 @@ sensor:
       signed: true
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state` | No | Base state filter |
-| `state_number` | No | Numeric value parser |
-| `lambda` | No | Custom parser: `float lambda(uint8_t* data, uint16_t len)` |
+| `state_number` | One of the two | Numeric value parser |
+| `lambda` | One of the two | Custom parser: `float lambda(uint8_t* data, uint16_t len)` |
 
 ---
 
@@ -524,15 +642,16 @@ text_sensor:
     name: "Status"
     state: [0x02, 0x03]
     lambda: |-
+      if (len < 3) return "Unknown";
       if (data[2] == 0x01) return "Running";
       if (data[2] == 0x02) return "Idle";
       return "Unknown";
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state` | No | Base state filter |
-| `lambda` | No | Text parser: `std::string lambda(uint8_t* data, uint16_t len)` |
+| `lambda` | **Yes** | Text parser: `std::string lambda(uint8_t* data, uint16_t len)` |
 
 ---
 
@@ -551,7 +670,7 @@ number:
       return {{0x02, 0x01, (uint8_t)x}, {0x02, 0x11}};
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state_number` | No | Current value parser |
 | `command_number` | No | Set value: `cmd_t lambda(float x)` |
@@ -569,20 +688,21 @@ select:
       - "Manual"
       - "Off"
     state_select: !lambda |-
+      if (len < 3) return "";
       if (data[2] == 0x01) return "Auto";
       if (data[2] == 0x02) return "Manual";
-      return "Off";
+      return data[2] == 0 ? "Off" : "";
     command_select: !lambda |-
       if (str == "Auto") return {{0x02, 0x01}, {}};
       if (str == "Manual") return {{0x02, 0x02}, {}};
       return {{0x02, 0x00}, {}};
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `options` | **Yes** | Available options |
 | `state_select` | No | State parser: `std::string lambda(...)` |
-| `command_select` | **Yes** | Selection command: `cmd_t lambda(std::string str)` |
+| `command_select` | No | Selection command: `cmd_t lambda(std::string str)` |
 
 ---
 
@@ -592,19 +712,27 @@ select:
 text:
   - platform: uartex
     name: "Message"
+    mode: text
     command_text: !lambda |-
       std::vector<uint8_t> cmd = {0x10};
       for (char c : str) cmd.push_back(c);
       return {cmd, {}};
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `command_text` | **Yes** | Text command: `cmd_t lambda(std::string str)` |
 
 ---
 
 ### Climate
+
+If a mode command also encodes the target temperature, use
+`id(thermostat).use_command_target_temperature()` for that packet field.
+During a combined request it returns the requested temperature. Otherwise it
+returns the current target. Once the combined packet is queued, UARTEx updates
+the target and skips the separate temperature command. Devices with distinct
+mode and temperature packets continue to send both.
 
 **Packet Example**:
 ```
@@ -621,6 +749,7 @@ Offset:               0     1     2
 climate:
   - platform: uartex
     name: "Thermostat"
+    id: thermostat
     visual:
       min_temperature: 16
       max_temperature: 30
@@ -636,7 +765,9 @@ climate:
     command_off:
       data: [0x03, 0x00]
     command_heat: !lambda |-
-      return {{0x03, 0x01, (uint8_t)id(thermostat).target_temperature}, {}};
+      float target = id(thermostat).use_command_target_temperature();
+      if (!(target >= 16 && target <= 30)) return {};
+      return {{0x03, 0x01, static_cast<uint8_t>(target)}};
     command_temperature: !lambda |-
       return {{0x03, 0x01, (uint8_t)x}, {}};
 ```
@@ -692,14 +823,14 @@ fan:
       return {{0x04, 0x01, (uint8_t)x}, {}};
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
-| `state_on` | **Yes** | ON state |
-| `state_off` | **Yes** | OFF state |
-| `state_speed` | No | Speed level (0-100) |
+| `state_on` | No | ON state |
+| `state_off` | No | OFF state |
+| `state_speed` | **Yes** | Speed level (1 through `speed_cnt` while running) |
 | `state_preset` | No | Preset parser |
-| `command_on` | **Yes** | ON command |
-| `command_off` | **Yes** | OFF command |
+| `command_on` | No | ON command |
+| `command_off` | No | OFF command |
 | `command_speed` | No | Speed command: `cmd_t lambda(float x)` |
 | `preset_modes` | No | Available presets list |
 
@@ -727,6 +858,7 @@ cover:
       data: [0x00]
     state_position:
       offset: 1
+      precision: 2
     command_open:
       data: [0x05, 0x01]
     command_close:
@@ -737,7 +869,7 @@ cover:
       return {{0x05, 0x03, (uint8_t)(x * 100)}, {}};
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state_open` | No | Open state |
 | `state_closed` | No | Closed state |
@@ -775,7 +907,7 @@ lock:
       data: [0x06, 0x00]
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state_locked` | No | Locked state |
 | `state_unlocked` | No | Unlocked state |
@@ -803,7 +935,7 @@ valve:
       data: [0x07, 0x00]
 ```
 
-| Option | Required | Description |
+| Option | Required by schema | Description |
 |--------|----------|-------------|
 | `state_open` | No | Open state |
 | `state_closed` | No | Closed state |
@@ -894,12 +1026,13 @@ media_player:
       data: [0x00]
     state_volume:
       offset: 1
+      precision: 2
     command_play:
       data: [0x08, 0x01]
     command_pause:
       data: [0x08, 0x02]
     command_volume: !lambda |-
-      return {{0x08, 0x10, (uint8_t)(x * 100)}, {}};
+      return {{0x08, 0x10, (uint8_t) lroundf(x)}, {}};
 ```
 
 <details>
@@ -917,7 +1050,7 @@ media_player:
 
 ### uartex.write
 
-Send raw data through UART.
+Send a payload using the configured TX header, checksum, and footer.
 
 ```yaml
 on_...:
@@ -946,7 +1079,7 @@ These options are available for all UARTEx platforms:
 | `state` | state | - | Base state filter |
 | `state_response` | state | - | Response state match |
 | `command_update` | command | - | Polling command |
-| `optimistic` | bool | `false` | Optimistic state updates |
+| `optimistic` | bool | `false` | For switches, publish the requested state immediately when enabled. Otherwise, publish on matching `state_on` or `state_off` feedback. Enable this for switches that have no state feedback. |
 | `update_interval` | time | `60s` | Polling interval |
 
 ---

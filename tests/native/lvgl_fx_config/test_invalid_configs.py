@@ -55,6 +55,12 @@ lvgl:
             text: "0"
         - bar:
             id: fx_bar
+        - line:
+            id: fx_line
+            points:
+              - {{ x: 0, y: 0 }}
+              - {{ x: 40, y: 0 }}
+              - {{ x: 40, y: 30 }}
 lvgl_fx:
 {fx}
 interval:
@@ -270,10 +276,214 @@ CASES = [
         "Unknown value 'roll'",
     ),
     (
-        "typewriter is not available",
-        "  transitions:\n    defaults:\n      text: { style: typewriter }",
+        'typewriter and decode styles (positive control)',
+        "  transitions:\n    defaults:\n      text: { style: typewriter, char_time: 20ms, jitter: true }\n    custom:\n      - id: d\n        text: { style: decode, char_time: 40ms, noise: '#%&*+<>/=0123456789', noise_period: 50ms, delay: 10ms, curve: ease_in }\n      - id: dd\n        text: { style: decode, duration: fast }\n      - id: only_pace\n        text: { char_time: 1ms, jitter: false, noise: '01', noise_period: 1s }",
+        "- lvgl_fx.set: { id: fx_label, text: x, transition: d }",
+        None,
+    ),
+    (
+        'typewriter with a duration (positive control)',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, duration: 800ms }',
+        "",
+        None,
+    ),
+    (
+        'char_time together with duration',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, char_time: 20ms, duration: 300ms }',
+        "",
+        "'char_time' and 'duration' both time the whole transition",
+    ),
+    (
+        'char_time together with a duration token',
+        '  transitions:\n    defaults:\n      text: { style: decode, char_time: 20ms, duration: fast }',
+        "",
+        "'char_time' and 'duration' both time the whole transition",
+    ),
+    (
+        'char_time without a style, with duration',
+        '  transitions:\n    custom:\n      - id: t\n        text: { char_time: 20ms, duration: 10ms }',
+        "",
+        "'char_time' and 'duration' both time the whole transition",
+    ),
+    (
+        'char_time on fade',
+        '  transitions:\n    defaults:\n      text: { style: fade, char_time: 20ms }',
+        "",
+        "'char_time' only applies to the styles typewriter and decode, not 'fade'",
+    ),
+    (
+        'char_time on count',
+        '  transitions:\n    defaults:\n      text: { style: count, char_time: 20ms }',
+        "",
+        "'char_time' only applies to the styles typewriter and decode, not 'count'",
+    ),
+    (
+        'char_time 0',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, char_time: 0ms }',
+        "",
+        'must be at least 1ms',
+    ),
+    (
+        'char_time above 5 s',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, char_time: 6s }',
+        "",
+        'must be at most 5000ms',
+    ),
+    (
+        'char_time without a unit',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, char_time: banana }',
+        "",
+        "Unknown value 'banana'",
+    ),
+    (
+        'char_time on a property without text',
+        '  transitions:\n    defaults:\n      value: { char_time: 20ms }',
+        "",
+        '[char_time] is an invalid option for [value]',
+    ),
+    (
+        'typewriter on visible',
+        '  transitions:\n    defaults:\n      visible: { style: typewriter }',
         "",
         "Unknown value 'typewriter'",
+    ),
+    (
+        'decode on visible (hide)',
+        '  transitions:\n    defaults:\n      visible: { show: fade, hide: decode }',
+        "",
+        "Unknown value 'decode'",
+    ),
+    (
+        'typewriter on value',
+        '  transitions:\n    defaults:\n      value: { style: typewriter }',
+        "",
+        '[style] is an invalid option for [value]',
+    ),
+    (
+        'decode on opacity',
+        '  transitions:\n    defaults:\n      opacity: { style: decode }',
+        "",
+        '[style] is an invalid option for [opacity]',
+    ),
+    (
+        'jitter on decode',
+        '  transitions:\n    defaults:\n      text: { style: decode, jitter: true }',
+        "",
+        "'jitter' only applies to the style typewriter, not 'decode'",
+    ),
+    (
+        'jitter on fade',
+        '  transitions:\n    defaults:\n      text: { style: fade, jitter: true }',
+        "",
+        "'jitter' only applies to the style typewriter, not 'fade'",
+    ),
+    (
+        'jitter not a bool',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, jitter: sometimes }',
+        "",
+        'Expected boolean value',
+    ),
+    (
+        'jitter on a property without text',
+        '  transitions:\n    defaults:\n      visible: { jitter: true }',
+        "",
+        '[jitter] is an invalid option for [visible]',
+    ),
+    (
+        'noise on typewriter',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, noise: abc }',
+        "",
+        "'noise' only applies to the style decode, not 'typewriter'",
+    ),
+    (
+        'noise_period on typewriter',
+        '  transitions:\n    defaults:\n      text: { style: typewriter, noise_period: 50ms }',
+        "",
+        "'noise_period' only applies to the style decode, not 'typewriter'",
+    ),
+    (
+        'noise on roll',
+        '  transitions:\n    defaults:\n      text: { style: roll, noise: abc }',
+        "",
+        "'noise' only applies to the style decode, not 'roll'",
+    ),
+    (
+        'empty noise',
+        "  transitions:\n    defaults:\n      text: { style: decode, noise: '' }",
+        "",
+        "'noise' must not be empty",
+    ),
+    (
+        'noise longer than 32',
+        "  transitions:\n    defaults:\n      text: { style: decode, noise: 'abcdefghabcdefghabcdefghabcdefghx' }",
+        "",
+        "'noise' has 33 characters; at most 32",
+    ),
+    (
+        'noise with a multi-byte character',
+        "  transitions:\n    defaults:\n      text: { style: decode, noise: 'aé' }",
+        "",
+        "'noise' must be printable ASCII",
+    ),
+    (
+        'noise with a newline',
+        '  transitions:\n    defaults:\n      text: { style: decode, noise: "a\\nb" }',
+        "",
+        "'noise' must be printable ASCII",
+    ),
+    (
+        'noise that is a number',
+        '  transitions:\n    defaults:\n      text: { style: decode, noise: 123 }',
+        "",
+        'Must be string',
+    ),
+    (
+        'noise_period 5 ms',
+        '  transitions:\n    defaults:\n      text: { style: decode, noise_period: 5ms }',
+        "",
+        'must be at least 10ms',
+    ),
+    (
+        'noise_period above 1 s',
+        '  transitions:\n    defaults:\n      text: { style: decode, noise_period: 2s }',
+        "",
+        'must be at most 1000ms',
+    ),
+    (
+        'noise on a property without text',
+        '  transitions:\n    defaults:\n      value: { noise: abc }',
+        "",
+        '[noise] is an invalid option for [value]',
+    ),
+    (
+        'max_text_runs 0',
+        '  max_text_runs: 0',
+        "",
+        'must be at least 1',
+    ),
+    (
+        'max_text_runs 33',
+        '  max_text_runs: 33',
+        "",
+        'must be at most 32',
+    ),
+    (
+        'max_text_length 15',
+        '  max_text_length: 15',
+        "",
+        'must be at least 16',
+    ),
+    (
+        'max_text_length 401',
+        '  max_text_length: 401',
+        "",
+        'must be at most 400',
+    ),
+    (
+        'max_text_runs and max_text_length (positive control)',
+        '  max_text_runs: 32\n  max_text_length: 400',
+        "",
+        None,
     ),
     (
         "style on a property without styles",
@@ -480,6 +690,153 @@ CASES = [
     ),
     ("empty preset", "  presets:\n    pulse:", "", "Preset 'pulse' sets nothing"),
     ("unknown retrigger", "  effect_defaults:\n    retrigger: always", "", "Unknown value 'always'"),
+    # ---- cooldown_scope / on_start ----
+    (
+        "cooldown_scope bad value",
+        "  effects:\n    - id: a\n      cooldown_scope: global\n      tracks:\n        - pulse:",
+        "",
+        "Unknown value 'global'",
+    ),
+    (
+        "cooldown_scope bad value in effect_defaults",
+        "  effect_defaults:\n    cooldown_scope: nope",
+        "",
+        "Unknown value 'nope'",
+    ),
+    (
+        "cooldown_scope widget (positive control)",
+        "  effect_defaults:\n    cooldown_scope: effect\n  effects:\n    - id: a\n      cooldown: 1s\n"
+        "      cooldown_scope: WIDGET\n      tracks:\n        - pulse:",
+        "",
+        None,
+    ),
+    (
+        "on_start on a loop",
+        "  effects:\n    - id: a\n      repeat: infinite\n      on_start:\n        - logger.log: hi\n"
+        "      tracks:\n        - blink:",
+        "",
+        "'on_start' cannot be used with 'repeat: infinite'",
+    ),
+    (
+        "on_start in effect_defaults",
+        "  effect_defaults:\n    on_start:\n      - logger.log: hi",
+        "",
+        "[on_start] is an invalid option",
+    ),
+    (
+        "on_start on an effect and a transition (positive control)",
+        "  transitions:\n    custom:\n      - id: t\n        text: { duration: 10ms }\n        on_start:\n"
+        "          - logger.log: hi\n          - lambda: fx::play(x, fx::PULSE);\n"
+        "  effects:\n    - id: a\n      on_start:\n        - logger.log: hi\n      tracks:\n        - pulse:",
+        "- lvgl_fx.play: { id: fx_label, effect: a }",
+        None,
+    ),
+    (
+        "on_start with an unknown action",
+        "  effects:\n    - id: a\n      on_start:\n        - nope.nothing:\n      tracks:\n        - pulse:",
+        "",
+        "nope.nothing",
+    ),
+    (
+        "on_start on a preset",
+        "  presets:\n    pulse: { scale: 112%, on_start: [] }",
+        "",
+        "[on_start] is an invalid option",
+    ),
+    # ---- on_end ----
+    (
+        "on_end on a loop",
+        "  effects:\n    - id: a\n      repeat: infinite\n      on_end:\n        - logger.log: hi\n"
+        "      tracks:\n        - blink:",
+        "",
+        "'on_end' cannot be used with 'repeat: infinite'",
+    ),
+    (
+        "on_end in effect_defaults",
+        "  effect_defaults:\n    on_end:\n      - logger.log: hi",
+        "",
+        "[on_end] is an invalid option",
+    ),
+    (
+        "on_end on a preset",
+        "  presets:\n    pulse: { scale: 112%, on_end: [] }",
+        "",
+        "[on_end] is an invalid option",
+    ),
+    (
+        "on_end with an unknown action",
+        "  effects:\n    - id: a\n      on_end:\n        - nope.nothing:\n      tracks:\n        - pulse:",
+        "",
+        "nope.nothing",
+    ),
+    (
+        "on_end alone does not make a transition",
+        "  transitions:\n    custom:\n      - id: t\n        on_end:\n          - logger.log: hi",
+        "",
+        "sets nothing",
+    ),
+    (
+        "on_end on an effect and a transition (positive control)",
+        "  transitions:\n    custom:\n      - id: t\n        draw: { duration: 10ms }\n        on_start:\n"
+        "          - logger.log: hi\n        on_end:\n          - logger.log: hi\n"
+        "          - lambda: lv_obj_set_hidden(x, true);\n"
+        "  effects:\n    - id: a\n      repeat: 2\n      then: pulse\n      on_end:\n        - logger.log: hi\n"
+        "      tracks:\n        - pulse:",
+        "- lvgl_fx.play: { id: fx_label, effect: a }",
+        None,
+    ),
+    # ---- line draw ----
+    (
+        "draw (positive control)",
+        "  max_line_runs: 32\n  max_line_points: 64\n  transitions:\n    defaults:\n      draw: { duration: 100ms, curve: ease_in, delay: 10ms }\n"
+        "    custom:\n      - id: trace\n        draw: { duration: fast }\n        then: pulse\n"
+        "    bindings:\n      - { id: fx_line, draw: trace }",
+        "- lvgl_fx.set: { id: fx_line, draw: 100% }\n- lvgl_fx.set: { id: fx_line, draw: 33.3%, transition: trace, instant: true }\n"
+        "- lvgl_fx.set: { id: fx_line, draw: !lambda 'return 12.5f;', force: true }",
+        None,
+    ),
+    ("draw 101%", VALID_EFFECT, "- lvgl_fx.set: { id: fx_line, draw: 101% }", "must be between 0% and 100%"),
+    ("draw negative", VALID_EFFECT, "- lvgl_fx.set: { id: fx_line, draw: -1% }", "must be between 0% and 100%"),
+    ("draw nan", VALID_EFFECT, "- lvgl_fx.set: { id: fx_line, draw: nan% }", "must be between 0% and 100%"),
+    ("draw bare number", VALID_EFFECT, "- lvgl_fx.set: { id: fx_line, draw: 50 }", "write the draw amount as a percentage"),
+    ("draw fraction", VALID_EFFECT, "- lvgl_fx.set: { id: fx_line, draw: 0.5 }", "write the draw amount as a percentage"),
+    ("draw on a label", VALID_EFFECT, "- lvgl_fx.set: { id: fx_label, draw: 50% }", "doesn't inherit from LvLineType"),
+    ("draw on a bar", VALID_EFFECT, "- lvgl_fx.set: { id: fx_bar, draw: 50% }", "doesn't inherit from LvLineType"),
+    (
+        "draw binding on a label",
+        "  transitions:\n    custom:\n      - id: trace\n        draw: { duration: 50ms }\n    bindings:\n      - { id: fx_label, draw: trace }",
+        "",
+        "doesn't inherit from LvLineType",
+    ),
+    (
+        "draw binding twice",
+        "  transitions:\n    custom:\n      - id: trace\n        draw: { duration: 50ms }\n    bindings:\n      - { id: fx_line, draw: trace }\n      - { id: fx_line, draw: trace }",
+        "",
+        "Duplicate transition binding",
+    ),
+    (
+        "draw style",
+        "  transitions:\n    defaults:\n      draw: { style: fade }",
+        "",
+        "[style] is an invalid option for [draw]",
+    ),
+    (
+        "draw format",
+        "  transitions:\n    defaults:\n      draw: { format: '%.0f' }",
+        "",
+        "[format] is an invalid option for [draw]",
+    ),
+    (
+        "draw duration above 60 s",
+        "  transitions:\n    defaults:\n      draw: { duration: 61s }",
+        "",
+        "must be at most",
+    ),
+    ("draw unknown curve", "  transitions:\n    defaults:\n      draw: { curve: bounce }", "", "Unknown value 'bounce'"),
+    ("max_line_runs 0", "  max_line_runs: 0", "", "must be at least 1"),
+    ("max_line_runs 33", "  max_line_runs: 33", "", "must be at most 32"),
+    ("max_line_points 1", "  max_line_points: 1", "", "must be at least 2"),
+    ("max_line_points 65", "  max_line_points: 65", "", "must be at most 64"),
     # ---- actions ----
     ("set without a property", VALID_EFFECT, "- lvgl_fx.set: { id: fx_label }", "Must contain exactly one of"),
     (

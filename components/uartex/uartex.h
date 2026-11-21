@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <deque>
 #include "esphome/core/automation.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/text_sensor/text_sensor.h"
@@ -28,10 +29,9 @@ struct tx_data_t
 {
     UARTExDevice* device{nullptr};
     const cmd_t* cmd{nullptr};
-    // Optional owner for ad-hoc commands built at runtime (write_command, the
-    // templated write action). Keeps the cmd_t alive from enqueue until the
-    // command is sent so `cmd` never dangles or gets overwritten in place.
-    std::shared_ptr<cmd_t> owned{};
+    // Own snapshots through queueing, transmission, and retries.
+    std::shared_ptr<const cmd_t> owned{};
+    std::vector<uint8_t> copy_source{};
 };
 
 struct header_t
@@ -45,7 +45,7 @@ struct rx_data_length_t
     uint8_t offset{0};
     uint8_t length{1};
     ENDIAN endian{ENDIAN_BIG};
-    int8_t adjust{0};
+    int16_t adjust{0};
 };
 
 struct rx_reply_t
@@ -97,18 +97,22 @@ public:
     void set_tx_retry_cnt(uint16_t tx_retry_cnt);
     void set_tx_command_queue_size(uint16_t size);
     void set_rx_length(uint16_t rx_length);
-    void set_rx_data_length(uint8_t offset, uint8_t length, ENDIAN endian, int8_t adjust);
+    void set_rx_length(std::function<int16_t(const uint8_t *data, uint16_t len)> &&length);
+    void set_rx_data_length(uint8_t offset, uint8_t length, ENDIAN endian, int16_t adjust);
     void set_rx_timeout(uint16_t timeout);
     void set_tx_ctrl_pin(InternalGPIOPin *pin);
     void enqueue_tx_data(const tx_data_t data, bool low_priority = false);
-    void enqueue_tx_reply(const tx_data_t data);
+    bool enqueue_tx_reply(const tx_data_t data);
     void write_command(cmd_t cmd);
+    void write_immediate_reply(const std::vector<uint8_t> &data);
 protected:
     bool is_tx_cmd_pending();
     void tx_cmd_result(bool result);
     void clear_tx_data();
     const cmd_t* current_tx_cmd();
     void write_tx_cmd();
+    std::vector<uint8_t> transmit_frame(const std::vector<uint8_t> &data);
+    void publish_tx_frame(const std::vector<uint8_t> &frame);
     ERROR validate_data();
     bool verify_data();
     bool publish_error(ERROR error_code);
@@ -116,7 +120,10 @@ protected:
     void publish_tx_log(const std::vector<unsigned char>& data);
     void publish_log(std::string msg);
     bool read_from_uart();
+    bool rx_available();
+    bool read_rx_byte(uint8_t &byte);
     bool parse_bytes();
+    bool parse_templated_length();
     void publish_to_devices();
     bool verify_ack();
     void process_rx_reply();
@@ -124,6 +131,7 @@ protected:
     void write_to_uart();
     bool retry_tx_data();
     void write_tx_data();
+    bool select_ready_tx(std::deque<tx_data_t> &queue);
     void dequeue_tx_data_from_devices();
 protected:
     std::vector<UARTExDevice *> devices_{};
@@ -133,6 +141,7 @@ protected:
     uint16_t conf_tx_retry_cnt_{3};
     uint16_t conf_tx_command_queue_size_{10};
     uint16_t conf_rx_length_{0};
+    std::function<int16_t(const uint8_t *data, uint16_t len)> rx_length_f_{};
     optional<rx_data_length_t> conf_rx_data_length_{};
     std::vector<header_t> rx_headers_{};
     std::vector<rx_reply_t> rx_reply_{};
@@ -152,14 +161,18 @@ protected:
     CallbackManager<void(const uint8_t *data, const uint16_t len)> read_callback_{};
     ERROR error_code_{ERROR_NONE};
     CallbackManager<void(const ERROR)> error_callback_{};
-    std::queue<tx_data_t> tx_queue_{};
+    std::deque<tx_data_t> tx_queue_{};
+    // Bound reply backlog independently of the deprecated command queue setting.
+    static constexpr size_t MAX_QUEUED_REPLIES = 10;
     std::queue<tx_data_t> tx_queue_reply_{};
-    std::queue<tx_data_t> tx_queue_low_priority_{};
+    std::deque<tx_data_t> tx_queue_low_priority_{};
     tx_data_t current_tx_data_{nullptr, nullptr};
     bool rx_processing_{false};
+    std::vector<uint8_t> rx_replay_{};
     unsigned long rx_timer_{0};
     unsigned long rx_time_{0};
     unsigned long tx_time_{0};
+    unsigned long tx_command_time_{0};
     uint16_t tx_retry_cnt_{0};
 
     InternalGPIOPin *tx_ctrl_pin_{nullptr};

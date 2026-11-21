@@ -22,12 +22,14 @@ from esphome.components.lvgl.lv_validation import (
     lv_text,
     opacity as lv_opacity,
 )
+from esphome.components.lvgl.defines import LValidator
 from esphome.components.lvgl.lvcode import LambdaContext, lv_add
 from esphome.components.lvgl.schemas import TEXT_SCHEMA
 from esphome.components.lvgl.types import ObjUpdateAction, lv_obj_t
 from esphome.components.lvgl.widgets import get_widgets
+from esphome.components.lvgl.widgets.line import line_spec
 import esphome.config_validation as cv
-from esphome.const import CONF_ID
+from esphome.const import CONF_ID, CONF_TRIGGER_ID
 from esphome.core import CORE
 from esphome import automation
 from esphome.cpp_generator import AssignmentExpression, MockObj, RawExpression, RawStatement
@@ -42,6 +44,9 @@ SetEnabledAction = lvgl_fx_ns.class_("SetEnabledAction", automation.Action)
 SetReducedMotionAction = lvgl_fx_ns.class_("SetReducedMotionAction", automation.Action)
 TransitionDef = lvgl_fx_ns.struct("TransitionDef")
 EffectDef = lvgl_fx_ns.struct("EffectDef")
+# `on_start:` / `on_end:` hooks pass the target widget; in lambdas it is `x`.
+OnStartTrigger = automation.Trigger.template(lv_obj_t.operator("ptr"))
+OnEndTrigger = automation.Trigger.template(lv_obj_t.operator("ptr"))
 
 CONF_MOTION = "motion"
 CONF_FAST = "fast"
@@ -51,6 +56,10 @@ CONF_INTENSITY = "intensity"
 CONF_SUPPRESS_WHEN = "suppress_when"
 CONF_MAX_TARGETS = "max_targets"
 CONF_SLOTS_IN_PSRAM = "slots_in_psram"
+CONF_MAX_TEXT_RUNS = "max_text_runs"
+CONF_MAX_TEXT_LENGTH = "max_text_length"
+CONF_MAX_LINE_RUNS = "max_line_runs"
+CONF_MAX_LINE_POINTS = "max_line_points"
 
 CONF_TRANSITIONS = "transitions"
 CONF_DEFAULTS = "defaults"
@@ -70,6 +79,10 @@ CONF_HIDE = "hide"
 CONF_FROM = "from"
 CONF_DISTANCE = "distance"
 CONF_FORMAT = "format"
+CONF_CHAR_TIME = "char_time"
+CONF_JITTER = "jitter"
+CONF_NOISE = "noise"
+CONF_NOISE_PERIOD = "noise_period"
 CONF_SCALE = "scale"
 CONF_X = "x"
 CONF_Y = "y"
@@ -83,6 +96,9 @@ CONF_RETRIGGER = "retrigger"
 CONF_WHEN_SUPPRESSED = "when_suppressed"
 CONF_DEFER_TIMEOUT = "defer_timeout"
 CONF_COOLDOWN = "cooldown"
+CONF_COOLDOWN_SCOPE = "cooldown_scope"
+CONF_ON_START = "on_start"
+CONF_ON_END = "on_end"
 CONF_POLICY = "policy"
 CONF_REPEAT = "repeat"
 CONF_REPEAT_DELAY = "repeat_delay"
@@ -94,6 +110,7 @@ CONF_VALUE = "value"
 CONF_TEXT = "text"
 CONF_ROTATION = "rotation"
 CONF_POSITION = "position"
+CONF_DRAW = "draw"
 
 # Durations are stored as uint16 milliseconds; the top values are reserved for the duration tokens (effects.h).
 MAX_DURATION_MS = 60000
@@ -108,14 +125,19 @@ MAX_CYCLES = 100
 # printf output of a number is cut at 48 bytes (styles.cpp TEXT_BUF); a width beyond it is pointless.
 MAX_FORMAT_WIDTH = 40
 MAX_FORMAT_PRECISION = 6  # also what `count` can step through (4.2.1)
+# decode uses at most this many bytes of its charset (styles.cpp MAX_NOISE)
+MAX_NOISE_LEN = 32
 
 DURATION_TOKENS = {CONF_FAST: "DUR_FAST", CONF_NORMAL: "DUR_NORMAL", CONF_SLOW: "DUR_SLOW"}
 CURVES = ("linear", "ease_in", "ease_out", "ease_in_out")
 
 # Order of enum class Prop (lvgl_fx.h): index = slot in TransitionDef::props.
-TRANSITION_PROPS = (CONF_VISIBLE, CONF_OPACITY, CONF_VALUE, CONF_TEXT, CONF_COLOR, CONF_POSITION, CONF_ROTATION)
+TRANSITION_PROPS = (
+    CONF_VISIBLE, CONF_OPACITY, CONF_VALUE, CONF_TEXT, CONF_COLOR, CONF_POSITION, CONF_ROTATION, CONF_DRAW
+)
 VISIBLE_STYLES = ("fade", "slide_up", "slide_down", "slide_left", "slide_right", "zoom", "none")
-TEXT_STYLES = ("fade", "roll", "count", "none")
+TEXT_STYLES = ("fade", "roll", "count", "typewriter", "decode", "none")
+CHAR_STYLES = ("typewriter", "decode")  # the styles whose time can be given per character
 
 BUILTIN_EFFECTS = {  # name -> (C++ constant, track kind)
     "pulse": ("PULSE", "pulse"),
@@ -276,16 +298,59 @@ def _visible_entry(value):
     return value
 
 
+_CHAR_TIME = cv.All(
+    cv.positive_time_period_milliseconds,
+    cv.Range(min=cv.TimePeriod(milliseconds=1), max=cv.TimePeriod(milliseconds=5000)),
+)
+_NOISE_PERIOD = cv.All(
+    cv.positive_time_period_milliseconds,
+    cv.Range(min=cv.TimePeriod(milliseconds=10), max=cv.TimePeriod(milliseconds=1000)),
+)
+
+
+def _noise(value):
+    """The symbols a decode cycles through: printable ASCII only (a multi-byte character cannot replace one byte)."""
+    value = cv.string_strict(value)
+    if not value:
+        raise cv.Invalid("'noise' must not be empty")
+    if len(value) > MAX_NOISE_LEN:
+        raise cv.Invalid(f"'noise' has {len(value)} characters; at most {MAX_NOISE_LEN}")
+    if any(not 0x20 <= ord(char) <= 0x7E for char in value):
+        raise cv.Invalid("'noise' must be printable ASCII (no control characters, no multi-byte characters)")
+    return value
+
+
 def _text_entry(value):
-    return cv.Schema(
+    value = cv.Schema(
         {
             **_TIMING,
             cv.Optional(CONF_STYLE): _style(TEXT_STYLES),
             cv.Optional(CONF_FROM): _percent(0, 100),  # opacity the new text starts at
             cv.Optional(CONF_DISTANCE): _px(0, MAX_DISTANCE_PX),
             cv.Optional(CONF_FORMAT): _format,
+            cv.Optional(CONF_CHAR_TIME): _CHAR_TIME,  # typewriter / decode: ms per character
+            cv.Optional(CONF_JITTER): cv.boolean,  # typewriter: uneven pace
+            cv.Optional(CONF_NOISE): _noise,  # decode: symbols
+            cv.Optional(CONF_NOISE_PERIOD): _NOISE_PERIOD,  # decode: ms between two noise changes
         }
     )(value)
+    # An entry that sets no `style` inherits it from a lower level (the defaults), which cannot be known here: only
+    # a style named in the same entry is checked.
+    style = value.get(CONF_STYLE)
+    if CONF_CHAR_TIME in value:
+        if CONF_DURATION in value:
+            raise cv.Invalid(
+                "'char_time' and 'duration' both time the whole transition: use 'char_time' (ms per character, "
+                "the duration follows the text length) or 'duration', not both"
+            )
+        if style is not None and style not in CHAR_STYLES:
+            raise cv.Invalid(f"'char_time' only applies to the styles {' and '.join(CHAR_STYLES)}, not '{style}'")
+    if CONF_JITTER in value and style is not None and style != "typewriter":
+        raise cv.Invalid(f"'jitter' only applies to the style typewriter, not '{style}'")
+    for key in (CONF_NOISE, CONF_NOISE_PERIOD):
+        if key in value and style is not None and style != "decode":
+            raise cv.Invalid(f"'{key}' only applies to the style decode, not '{style}'")
+    return value
 
 
 _PLAIN_ENTRY = cv.Schema(_TIMING)
@@ -298,6 +363,7 @@ _ENTRY_VALIDATORS = {
     CONF_COLOR: _PLAIN_ENTRY,
     CONF_POSITION: _PLAIN_ENTRY,
     CONF_ROTATION: _PLAIN_ENTRY,
+    CONF_DRAW: _PLAIN_ENTRY,
 }
 
 
@@ -316,6 +382,12 @@ _PROP_ENTRIES = {cv.Optional(prop): _entry(prop) for prop in TRANSITION_PROPS}
 DEFAULTS_SCHEMA = cv.Schema(_PROP_ENTRIES)
 
 
+_ON_START = automation.validate_automation(
+    {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnStartTrigger)}
+)
+_ON_END = automation.validate_automation({cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(OnEndTrigger)})
+
+
 def _custom_transition(value):
     value = cv.Schema(
         {
@@ -323,6 +395,8 @@ def _custom_transition(value):
             **_PROP_ENTRIES,
             cv.Optional(CONF_THEN): _effect_ref,
             cv.Optional(CONF_POLICY): cv.one_of("normal", "always", lower=True),
+            cv.Optional(CONF_ON_START): _ON_START,
+            cv.Optional(CONF_ON_END): _ON_END,
         }
     )(value)
     if not any(key in value for key in (*TRANSITION_PROPS, CONF_THEN)):
@@ -340,7 +414,7 @@ def _binding(value):
     })(value)
     if not any(prop in value for prop in TRANSITION_PROPS):
         raise cv.Invalid("A transition binding needs at least one property")
-    return value
+    return _draw_needs_line(value)
 
 
 def _unique_bindings(value):
@@ -439,6 +513,7 @@ _OPTIONS = {
     cv.Optional(CONF_WHEN_SUPPRESSED): cv.one_of("skip", "defer", lower=True),
     cv.Optional(CONF_DEFER_TIMEOUT): _time,
     cv.Optional(CONF_COOLDOWN): _time,
+    cv.Optional(CONF_COOLDOWN_SCOPE): cv.one_of("effect", "widget", lower=True),
     cv.Optional(CONF_POLICY): cv.one_of("normal", "always", lower=True),
     cv.Optional(CONF_REPEAT_DELAY): _time,
 }
@@ -471,6 +546,8 @@ def _effect(value):
             cv.Required(CONF_TRACKS): cv.All(cv.ensure_list(_track), cv.Length(min=1, max=MAX_TRACKS)),
             cv.Optional(CONF_REPEAT): _repeat,
             cv.Optional(CONF_THEN): _effect_ref,
+            cv.Optional(CONF_ON_START): _ON_START,
+            cv.Optional(CONF_ON_END): _ON_END,
             **_OPTIONS,
         }
     )(value)
@@ -484,6 +561,16 @@ def _effect(value):
         raise cv.Invalid(
             "'then' cannot be used with 'repeat: infinite': a loop never ends, so nothing could follow it",
             [CONF_THEN],
+        )
+    if value.get(CONF_REPEAT) == "infinite" and CONF_ON_START in value:
+        raise cv.Invalid(
+            "'on_start' cannot be used with 'repeat: infinite': hooks are not supported on loops",
+            [CONF_ON_START],
+        )
+    if value.get(CONF_REPEAT) == "infinite" and CONF_ON_END in value:
+        raise cv.Invalid(
+            "'on_end' cannot be used with 'repeat: infinite': a loop never ends, so nothing could follow it",
+            [CONF_ON_END],
         )
     return value
 
@@ -539,6 +626,13 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_SUPPRESS_WHEN): cv.returning_lambda,
         cv.Optional(CONF_MAX_TARGETS, default=32): cv.int_range(min=1, max=255),
         cv.Optional(CONF_SLOTS_IN_PSRAM, default=False): cv.boolean,
+        # typewriter / decode: static pool of text runs (styles.cpp), emitted as the defines the C++ side defaults
+        cv.Optional(CONF_MAX_TEXT_RUNS, default=4): cv.int_range(min=1, max=32),
+        # bytes of a run including the NUL; the character weights of a text must fit a uint16 (127 x 140 ... 399 x 140)
+        cv.Optional(CONF_MAX_TEXT_LENGTH, default=128): cv.int_range(min=16, max=400),
+        # line draw: static pool of partial point buffers (draw.cpp), emitted as the defines the C++ side defaults
+        cv.Optional(CONF_MAX_LINE_RUNS, default=4): cv.int_range(min=1, max=32),
+        cv.Optional(CONF_MAX_LINE_POINTS, default=16): cv.int_range(min=2, max=64),
         cv.Optional(CONF_TRANSITIONS): TRANSITIONS_SCHEMA,
         cv.Optional(CONF_PRESETS): PRESETS_SCHEMA,
         cv.Optional(CONF_EFFECTS): cv.ensure_list(_effect),
@@ -674,6 +768,7 @@ def _option_fields(conf):
         ("repeat_delay", _get(conf, CONF_REPEAT_DELAY, _ms)),
         ("cooldown", _get(conf, CONF_COOLDOWN, _ms)),
         ("defer_timeout", _get(conf, CONF_DEFER_TIMEOUT, _ms)),
+        ("cooldown_scope", _get(conf, CONF_COOLDOWN_SCOPE, lambda v: _cpp("CooldownScope", v))),
     ]
 
 
@@ -685,7 +780,33 @@ def _use_track(kind):
     cg.add_define(f"USE_LVGL_FX_{kind.upper()}")
 
 
-def _effect_to_code(effect):
+async def _hook_to_code(id_, config, key):
+    """Emit a captureless function that fires the `on_start:` / `on_end:` automation `key`; return its name (None
+    without a hook).
+
+    The Trigger is a global pointer, so the function needs no capture and fits the plain pointer in the const table.
+    The hook is a list of automations like any ESPHome trigger; each gets its own Trigger, all fired in order."""
+    if key not in config:
+        return None
+    triggers = []
+    for conf in config[key]:
+        trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID])
+        await automation.build_automation(trigger, [(lv_obj_t.operator("ptr"), "x")], conf)
+        triggers.append(f"{conf[CONF_TRIGGER_ID]}->trigger(target);")
+    name = _ident(id_, key)
+    cg.add_global(RawStatement(f"static void {name}(lv_obj_t *target) {{ {' '.join(triggers)} }}"))
+    return name
+
+
+async def _on_start_to_code(id_, config):
+    return await _hook_to_code(id_, config, CONF_ON_START)
+
+
+async def _on_end_to_code(id_, config):
+    return await _hook_to_code(id_, config, CONF_ON_END)
+
+
+async def _effect_to_code(effect):
     id_ = effect[CONF_ID]
     tracks = []
     for track in effect[CONF_TRACKS]:
@@ -694,11 +815,17 @@ def _effect_to_code(effect):
     cg.add_global(
         RawStatement(f"static const {lvgl_fx_ns}::Track {_ident(id_, 'tracks')}[] = {{" + ", ".join(tracks) + "};")
     )
+    # Declaration order of EffectDef: the options, then `then`, then the fields added later.
+    options = dict(_option_fields(effect))
+    scope = options.pop("cooldown_scope")
     fields = [
         ("tracks", _ident(id_, "tracks")),
         ("track_count", str(len(tracks))),
-        *_option_fields(effect),
+        *options.items(),
         ("then", _get(effect, CONF_THEN, _then_cpp)),
+        ("cooldown_scope", scope),
+        ("on_start", await _on_start_to_code(id_, effect)),
+        ("on_end", await _on_end_to_code(id_, effect)),
     ]
     _declare(id_, EffectDef, _init(fields))
 
@@ -734,6 +861,10 @@ def _prop_fields(prop, conf):
         ("from", _get(conf, CONF_FROM, str)),
         ("distance", _get(conf, CONF_DISTANCE, str)),
         ("format", _get(conf, CONF_FORMAT, _cstring)),
+        ("char_time", _get(conf, CONF_CHAR_TIME, _ms)),
+        ("jitter", _get(conf, CONF_JITTER, lambda v: "1" if v else "0")),
+        ("noise", _get(conf, CONF_NOISE, _cstring)),
+        ("noise_period", _get(conf, CONF_NOISE_PERIOD, _ms)),
     ]
 
 
@@ -795,6 +926,10 @@ async def to_code(config):
     )
     cg.add(var.set_max_targets(config[CONF_MAX_TARGETS]))
     cg.add(var.set_slots_in_psram(config[CONF_SLOTS_IN_PSRAM]))
+    cg.add_define("LVGL_FX_TEXT_RUNS", config[CONF_MAX_TEXT_RUNS])
+    cg.add_define("LVGL_FX_TEXT_RUN_BYTES", config[CONF_MAX_TEXT_LENGTH])
+    cg.add_define("LVGL_FX_LINE_RUNS", config[CONF_MAX_LINE_RUNS])
+    cg.add_define("LVGL_FX_LINE_POINTS", config[CONF_MAX_LINE_POINTS])
     if CONF_SUPPRESS_WHEN in config:
         # A plain function pointer: the lambda must not capture anything.
         lam = await cg.process_lambda(config[CONF_SUPPRESS_WHEN], [], return_type=cg.bool_, capture="")
@@ -804,7 +939,7 @@ async def to_code(config):
     cg.add_global(RawStatement("namespace fx = esphome::lvgl_fx;"))
 
     for effect in _ordered_effects(config.get(CONF_EFFECTS, [])):
-        _effect_to_code(effect)
+        await _effect_to_code(effect)
 
     transitions = config.get(CONF_TRANSITIONS, {})
     if CONF_DEFAULTS in transitions:
@@ -819,13 +954,20 @@ async def to_code(config):
             ("props", _transition_table(f"lvgl_fx_id_{id_.id}", transition)),
             ("then", _get(transition, CONF_THEN, _then_cpp)),
             ("policy", _get(transition, CONF_POLICY, lambda v: _cpp("EffectPolicy", v))),
+            ("on_start", await _on_start_to_code(id_, transition)),
+            ("on_end", await _on_end_to_code(id_, transition)),
         ]
         _declare(id_, TransitionDef, _init(fields))
 
     binding_index = 0
     for binding in transitions.get(CONF_BINDINGS, []):
         (widget,) = await get_widgets(binding)
-        getter = f"{widget.var} ? {widget.obj} : nullptr" if widget.type.is_compound() else str(widget.obj)
+        # A compound widget's `obj` stays null until the widget is created.  The pointer goes through a local so that a
+        # statically allocated widget (whose address is never null) does not trigger -Waddress.
+        if widget.type.is_compound():
+            getter = f"[]() -> lv_obj_t * {{ auto *w = {widget.var}; return w != nullptr ? w->obj : nullptr; }}"
+        else:
+            getter = f"[]() -> lv_obj_t * {{ return {widget.obj}; }}"
         for prop in TRANSITION_PROPS:
             if prop not in binding:
                 continue
@@ -834,7 +976,7 @@ async def to_code(config):
             binding_index += 1
             cg.add(RawStatement(
                 f"static {lvgl_fx_ns}::Binding {name} = "
-                f"{{[]() -> lv_obj_t * {{ return {getter}; }}, {_cpp('Prop', prop)}, {transition}}};"
+                f"{{{getter}, {_cpp('Prop', prop)}, {transition}}};"
             ))
             cg.add(var.add_binding(RawExpression(f"&{name}")))
 
@@ -885,6 +1027,20 @@ automation.register_action(
 )(_switch_to_code)
 
 
+def _draw_percent(value):
+    """`draw: 100%` / `33.3%`: the share of the line's path length, 0 - 100 (a lambda returns the number 0 - 100).
+
+    Bare numbers are refused: `0.5` and `50` would be read differently by every other property."""
+    if isinstance(value, str) and value.strip().endswith("%"):
+        number = cv.float_(value.strip()[:-1])
+        if not math.isfinite(number) or not 0 <= number <= 100:
+            raise cv.Invalid(f"{value!r} must be between 0% and 100%")
+        return number
+    raise cv.Invalid(f"{value!r}: write the draw amount as a percentage ('100%', '33.3%') or a lambda returning 0 - 100")
+
+
+lv_draw_percent = LValidator(_draw_percent, cg.float_)
+
 # property -> (validator of the value (None: text, see TEXT_SCHEMA), C++ setter)
 SET_PROPERTIES = {
     CONF_VISIBLE: (lv_bool, "set_visible"),
@@ -895,10 +1051,18 @@ SET_PROPERTIES = {
     CONF_X: (lv_int, "set_x"),
     CONF_Y: (lv_int, "set_y"),
     CONF_ROTATION: (lv_float, "set_rotation"),
+    CONF_DRAW: (lv_draw_percent, "set_draw"),
 }
 
 _WIDGET = {cv.Required(CONF_ID): cv.use_id(lv_obj_t)}
 _FORCE = {cv.Optional(CONF_FORCE): lv_bool}
+
+def _draw_needs_line(value):
+    """`draw` only exists for `line` widgets: the id is checked against the line type (a clear error, not a log line)."""
+    if CONF_DRAW in value:
+        value = {**value, CONF_ID: cv.use_id(line_spec.w_type)(value[CONF_ID].id)}
+    return value
+
 
 SET_SCHEMA = cv.All(
     cv.Schema(
@@ -916,6 +1080,7 @@ SET_SCHEMA = cv.All(
         }
     ),
     cv.has_exactly_one_key(*SET_PROPERTIES),
+    _draw_needs_line,
 )
 
 PLAY_SCHEMA = cv.Schema({**_WIDGET, cv.Required(CONF_EFFECT): _effect_ref, **_FORCE})

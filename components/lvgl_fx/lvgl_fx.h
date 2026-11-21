@@ -18,12 +18,17 @@ namespace lvgl_fx {
 
 // ---- transition definitions (const tables; P4 codegen emits these into flash) ---------------------------------------
 
-enum class Prop : uint8_t { VISIBLE, OPACITY, VALUE, TEXT, COLOR, POSITION, ROTATION, COUNT };
+enum class Prop : uint8_t { VISIBLE, OPACITY, VALUE, TEXT, COLOR, POSITION, ROTATION, DRAW, COUNT };
 constexpr size_t PROP_COUNT = static_cast<size_t>(Prop::COUNT);
 
+// DRAW has no styles: it is a plain timed entry (duration, delay, curve) like VALUE.
 // Transition styles.  Which style applies where: VISIBLE fade / slide_* / zoom / none, TEXT fade / roll /
-// count / none; everything else is ignored for a property (a text entry asking for slide_* behaves as fade).
-enum class Style : uint8_t { DEFAULT, NONE, FADE, SLIDE_UP, SLIDE_DOWN, SLIDE_LEFT, SLIDE_RIGHT, ZOOM, ROLL, COUNT };
+// count / typewriter / decode / none; everything else is ignored for a property (a text entry asking for slide_*
+// behaves as fade, a visible entry asking for typewriter too).  New styles are appended: generated code keeps
+// compiling.
+enum class Style : uint8_t {
+  DEFAULT, NONE, FADE, SLIDE_UP, SLIDE_DOWN, SLIDE_LEFT, SLIDE_RIGHT, ZOOM, ROLL, COUNT, TYPEWRITER, DECODE
+};
 
 // How one property moves to a new value.  Every field has an "unset" default: a definition only lists what it says
 // (designated initializers, in declaration order), and each unset field falls back, at run time, to the same property
@@ -44,6 +49,14 @@ struct PropTransition {
   uint16_t distance = UNSET_U16;        // px.  slide_*: travel (12); roll: travel (14)
   const char *format = nullptr;         // label numbers: printf format with one %f conversion ("%.0f"); count only
                                         // counts through %f formats (set_value formats anything once)
+  // typewriter / decode: the pace can be given per character instead of for the whole text (appended fields).
+  uint16_t char_time = UNSET_U16;       // ms per character (code point): duration = characters * char_time (at most
+                                        // 60 s).  Beats a `duration` of the same or a lower level (the named
+                                        // transition, then defaults, then built-ins); 0 = not set
+  uint8_t jitter = UNSET_U8;            // typewriter: 1 = uneven, human-like pace (same total time); 0 = even (0)
+  const char *noise = nullptr;          // decode: ASCII symbols the unlocked positions cycle through
+                                        // ("#%&*+<>/=0123456789"); the leading printable ASCII, at most 32 bytes
+  uint16_t noise_period = UNSET_U16;    // decode: ms between two noise changes (50)
 };
 
 // A named transition: per-property entries (nullptr = fall back to the defaults) plus an optional follow-up effect.
@@ -52,6 +65,14 @@ struct TransitionDef {
   const PropTransition *props[PROP_COUNT];
   const EffectDef *then;  // effect played on the same target when the transition completes (not on stop())
   EffectPolicy policy = EffectPolicy::NORMAL;  // ALWAYS ignores suppress_when only
+  // `on_start:` hook, called with the target once per set call that starts an animation (not when the change is
+  // applied instantly or is a no-op), after the animation is running.  A captureless function.
+  void (*on_start)(lv_obj_t *) = nullptr;
+  // `on_end:` hook, called with the target at exactly the moments `then` would play, just before it: when an animation
+  // completes, and when the change is applied at once (policy, duration 0, style none, full pool, LVGL allocation
+  // failure).  Not called for a no-op set, stop(), `instant`, a superseded animation or a line the app took over.
+  // May call play / stop / set on the same widget.  A captureless function.
+  void (*on_end)(lv_obj_t *) = nullptr;
 };
 using TransitionRef = const TransitionDef *;
 
@@ -74,6 +95,13 @@ struct Opt {
   bool force = false;                  // ignore policy suppression (boot sequences)
   bool always = false;                 // ignore suppress_when only
   bool instant = false;                // cancel this property and apply immediately, without then
+  // Cross-widget completion (every set_*; ignored by play()): when the transition really ends - not after instant
+  // application (policy, duration 0, `instant`, a full pool), stop(), or when it is replaced or cancelled - this
+  // effect is played on `completion_target` with the default policy, after the transition's own `then`.  Same fields and
+  // semantics as TweenOpt.  A completion record is allocated per call that sets both (nothing per frame); the target is
+  // disarmed when it is deleted.
+  EffectRef completion_effect = nullptr;
+  lv_obj_t *completion_target = nullptr;
 };
 
 // Motion tokens.  Runtime-changeable, e.g. `fx::motion().intensity = 0.6f;`.
@@ -141,9 +169,18 @@ struct ResolvedTransition {
   uint8_t from;       // percent
   uint16_t distance;  // px
   const char *format;
+  uint16_t char_time;     // ms per character; 0 = the transition is timed by `duration`
+  bool jitter;
+  const char *noise;      // nullptr = the built-in charset
+  uint16_t noise_period;  // ms
 };
 ResolvedTransition resolve(TransitionRef transition, Prop prop);
 uint32_t resolve_duration(uint16_t duration);
+
+// Run the named transition's `on_start` hook (call after the animation has started and the bookkeeping is done).
+inline void notify_start(lv_obj_t *obj, const Opt &opt) {
+  if (opt.transition != nullptr && opt.transition->on_start != nullptr) opt.transition->on_start(obj);
+}
 
 // ---- animation plumbing (lvgl_fx.cpp), shared with styles.cpp ----
 // Key rules for lv_anim: (var, exec_cb) identifies an animation and lv_anim_start replaces a running one with the same
@@ -153,7 +190,14 @@ bool start_anim(void *var, lv_anim_exec_xcb_t exec, int32_t from, int32_t to, ui
                 Curve curve, lv_anim_completed_cb_t done = nullptr, void *user_data = nullptr,
                 bool early_apply = true, lv_anim_deleted_cb_t deleted = nullptr);  // false: nothing is applied (and nothing replaced) before `delay` is over
 // `then` of a call as an anim user_data (nullptr = nothing to play), and its two ways of running.
-void *then_of(const Opt &opt);
+void *then_of(const Opt &opt);  // the transition (carried as user_data) when it has a `then` or an `on_end`
+// The one place a transition ends: its `on_end` hook, then its `then` effect.  Every completion path goes through it.
+void finish_transition(lv_obj_t *obj, TransitionRef transition);
+// start_anim() for a transition of the call `opt`: timing from `t`, and the anim carries what has to happen when it ends
+// (the transition's `then` and a cross-widget completion, released when the anim goes away).  false: LVGL could not
+// allocate the animation (nothing was started or replaced).
+bool start_transition_anim(void *var, lv_anim_exec_xcb_t exec, int32_t from, int32_t to, const ResolvedTransition &t,
+                           const Opt &opt, lv_anim_completed_cb_t done, bool early_apply = true);
 void instant_then(lv_obj_t *obj, const Opt &opt);  // transition applied instantly: it completes at once
 void slot_done(lv_anim_t *anim);                   // anim completed: play the `then` in user_data on the slot's target
 // Stop one animation and run it to its end state; completion callbacks that complete state run, `then` does not.
@@ -170,6 +214,8 @@ void drop_visible_style(Slot *slot);
 void set_label_value(lv_obj_t *obj, float value, const Opt &opt);
 // stop(): run the text style to its end state and drop it.
 void stop_text(Slot *slot);
+// stop(): a running line draw jumps to its target percent (draw.cpp).
+void stop_draw(Slot *slot);
 
 // ---- effect runner (runner.cpp) ----
 // A slot is "watched" while LvglFx::loop() has to look at it: a deferred effect, or a loop that is on.
@@ -204,9 +250,26 @@ void set_x(lv_obj_t *obj, int32_t x, Opt opt = {});
 void set_y(lv_obj_t *obj, int32_t y, Opt opt = {});
 // transform rotation of any widget.  Non-finite: instantly 0.  Mind transform_pivot.
 void set_rotation(lv_obj_t *obj, float degrees, Opt opt = {});
+// lv_line: draw the polyline progressively by path length, 0 = nothing, 100 = all of it (clamped; float allowed).
+// Non-finite: instantly 0.  Other targets: logged once, no effect.  The line's points array must outlive the line
+// (LVGL's own rule); see README "Line draw".
+void set_draw(lv_obj_t *obj, float percent, Opt opt = {});
 
-// Effects: pass an effect.  The only call-site override is `opt.force`; `opt.transition` is ignored.
-void play(lv_obj_t *obj, EffectRef effect, Opt opt = {});
+// What play() did.  Exactly one value per call.
+enum class PlayResult : uint8_t {
+  STARTED,     // the effect is running now (a loop that was switched on and moves)
+  DEFERRED,    // `when_suppressed: defer`: kept, plays when suppression ends (if within defer_timeout)
+  REMEMBERED,  // a loop that is now on but at rest because policy does not allow motion yet; it starts by itself
+  IGNORED,     // already running: `retrigger: ignore` for a one-shot, or the same loop is already on
+  DROPPED,     // policy: disabled, reduced motion, before start(), hidden widget or ancestor, `suppress_when` + skip
+  COOLDOWN,    // `cooldown` not over
+  NO_SLOT,     // the slot pool is full (or LVGL could not allocate the animation): the effect is skipped
+  INVALID,     // null widget or effect, or an effect without any motion (no track has a duration)
+};
+
+// Effects: pass an effect.  The only call-site override is `opt.force`; `opt.transition` is ignored.  The result says
+// what happened; ignoring it is fine.
+PlayResult play(lv_obj_t *obj, EffectRef effect, Opt opt = {});
 
 // Stop all motion on a target and snap to the final state: transitions to their target value, effects to rest.
 void stop(lv_obj_t *obj);
@@ -215,6 +278,8 @@ void stop(lv_obj_t *obj, EffectRef effect);
 
 // Declare the UI ready.  Before this, transitions apply instantly (policy row 2).
 void start();
+// True once start() has been called (policy row 2).
+bool is_ready();
 
 // Policy switches (policy row 1).
 void set_enabled(bool enabled);
@@ -229,7 +294,10 @@ inline void set_color(lvgl::LvCompound *w, lv_color_t color, Opt opt = {}) { set
 inline void set_x(lvgl::LvCompound *w, int32_t x, Opt opt = {}) { set_x(w->obj, x, opt); }
 inline void set_y(lvgl::LvCompound *w, int32_t y, Opt opt = {}) { set_y(w->obj, y, opt); }
 inline void set_rotation(lvgl::LvCompound *w, float degrees, Opt opt = {}) { set_rotation(w->obj, degrees, opt); }
-inline void play(lvgl::LvCompound *w, EffectRef effect, Opt opt = {}) { play(w->obj, effect, opt); }
+inline void set_draw(lvgl::LvCompound *w, float percent, Opt opt = {}) { set_draw(w->obj, percent, opt); }
+inline PlayResult play(lvgl::LvCompound *w, EffectRef effect, Opt opt = {}) {
+  return play(w == nullptr ? nullptr : w->obj, effect, opt);
+}
 inline void stop(lvgl::LvCompound *w) { stop(w->obj); }
 inline void stop(lvgl::LvCompound *w, EffectRef effect) { stop(w->obj, effect); }
 
