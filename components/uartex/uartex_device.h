@@ -116,6 +116,10 @@ public:
     void set_state_debounce(uint32_t ms) { this->state_debounce_ms_ = ms; }
     void set_state_debounce_mask(uint16_t offset, std::vector<uint8_t> mask) { this->debounce_offset_ = offset; this->debounce_mask_ = std::move(mask); }
     bool enqueue_tx_cmd(const cmd_t* cmd, bool low_priority = false);
+    // Enqueue a control() command and return whether the requested state should be reflected.
+    // Reflect only when optimistic and the command is either not configured (virtual entity)
+    // or produced data. A configured command whose lambda returned no data is a rejection.
+    bool enqueue_and_reflect(const cmd_t* cmd);
     std::shared_ptr<const cmd_t> dequeue_tx_cmd();
     std::shared_ptr<const cmd_t> dequeue_tx_cmd_low_priority();
     bool parse_data(const std::vector<uint8_t>& data);
@@ -140,6 +144,7 @@ protected:
     optional<float> get_state_float(const std::string& name, const std::vector<uint8_t>& data);
     optional<std::string> get_state_str(const std::string& name, const std::vector<uint8_t>& data);
     bool has_named_state(const std::string& name);
+    bool has_named_command(const std::string& name);
     state_t* get_state() { return get_state("state"); }
     state_t* get_state_on() { return get_state("state_on"); }
     state_t* get_state_off() { return get_state("state_off"); }
@@ -160,7 +165,7 @@ protected:
     std::unordered_map<std::string, std::function<cmd_t(const std::string& str)>> command_str_func_map_{};
     
     bool rx_response_{false};
-    bool optimistic_{false};
+    bool optimistic_{true};
     std::queue<std::shared_ptr<const cmd_t>> tx_cmd_queue_{};
     std::queue<std::shared_ptr<const cmd_t>> tx_cmd_queue_low_priority_{};
     std::vector<uint8_t> last_state_{};

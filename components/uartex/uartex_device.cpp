@@ -171,6 +171,12 @@ bool UARTExDevice::enqueue_tx_cmd(const cmd_t* cmd, bool low_priority)
     return true;
 }
 
+bool UARTExDevice::enqueue_and_reflect(const cmd_t* cmd)
+{
+    this->enqueue_tx_cmd(cmd);
+    return this->optimistic_ && (cmd == nullptr || !cmd->data.empty());
+}
+
 cmd_t* UARTExDevice::get_command(const std::string& name, const std::string& str)
 {
     if (contains(this->command_str_func_map_, name))
@@ -228,6 +234,15 @@ optional<std::string> UARTExDevice::get_state_str(const std::string& name, const
 {
     if (contains(this->state_str_func_map_, name)) return (this->state_str_func_map_[name])(&data[0], data.size());
     return optional<std::string>();
+}
+
+bool UARTExDevice::has_named_command(const std::string& name)
+{
+    if (contains(this->command_func_map_, name)) return true;
+    if (contains(this->command_float_func_map_, name)) return true;
+    if (contains(this->command_str_func_map_, name)) return true;
+    if (contains(this->command_map_, name)) return true;
+    return false;
 }
 
 bool UARTExDevice::has_named_state(const std::string& name)
